@@ -1,0 +1,10 @@
+# node
+web/node_modules
+web/dist
+# dotnet
+api/bin
+api/obj
+# env files
+.env
+api/.env
+web/.env*
