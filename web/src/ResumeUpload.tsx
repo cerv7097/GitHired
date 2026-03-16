@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface ParseResult {
   success: boolean;
@@ -9,6 +9,7 @@ interface ParseResult {
   detected_sections: string[];
   file_name: string;
   file_type: string;
+  ats_score: number;
 }
 
 interface ToolExecution {
@@ -28,7 +29,55 @@ interface UploadResponse {
   agent_analysis: AgentAnalysis;
 }
 
-export default function ResumeUpload() {
+interface ResumeUploadProps {
+  userId?: string;
+  onAtsScoreUpdate?: (score: number | null) => void;
+}
+
+export function extractAtsScore(result: UploadResponse | null): number | null {
+  if (!result) return null;
+
+  const atsTool = result.agent_analysis.tools_used.find(t =>
+    t.toolName === 'analyze_ats_compatibility'
+  );
+
+  if (!atsTool) return null;
+
+  // Helper to clamp and round any numeric value we can interpret
+  const sanitize = (value: unknown): number | null => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.min(100, Math.max(0, Math.round(numeric)));
+  };
+
+  try {
+    const atsResult = JSON.parse(atsTool.result);
+    if (atsResult.choices && atsResult.choices[0]?.message?.content) {
+      const content = JSON.parse(atsResult.choices[0].message.content);
+      const fromContent = sanitize(content.overall_score ?? content.score);
+      if (fromContent !== null) return fromContent;
+    }
+    const fromRoot = sanitize(atsResult.overall_score ?? atsResult.score);
+    if (fromRoot !== null) return fromRoot;
+  } catch {
+    // fall through to lightweight parsing below
+  }
+
+  // Try a plain number string (e.g., "0" or 0)
+  const plainNumber = sanitize(atsTool.result);
+  if (plainNumber !== null) return plainNumber;
+
+  // Last resort: find first 0-100 number in the string
+  const match = atsTool.result.match(/\b([0-9]{1,3})\b/);
+  if (match) {
+    const guessed = sanitize(match[1]);
+    if (guessed !== null) return guessed;
+  }
+
+  return null;
+}
+
+export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: ResumeUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [targetRole, setTargetRole] = useState('');
   const [targetIndustry, setTargetIndustry] = useState('');
@@ -36,8 +85,8 @@ export default function ResumeUpload() {
   const [result, setResult] = useState<UploadResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
-
-  const userId = 'user-123'; // In production, get from auth
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const parserScore = result?.parse_result?.ats_score ?? null;
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -128,264 +177,178 @@ export default function ResumeUpload() {
     }
   };
 
-  const getATSScore = (): number | null => {
-    if (!result) return null;
-
-    const atsTool = result.agent_analysis.tools_used.find(t =>
-      t.toolName === 'analyze_ats_compatibility'
-    );
-
-    if (atsTool) {
-      try {
-        const atsResult = JSON.parse(atsTool.result);
-        // Try to extract content from OpenAI response format
-        if (atsResult.choices && atsResult.choices[0]?.message?.content) {
-          const content = JSON.parse(atsResult.choices[0].message.content);
-          return content.overall_score || content.score || null;
-        }
-        return atsResult.overall_score || atsResult.score || null;
-      } catch {
-        return null;
-      }
+  // Keep parent dashboard in sync with whatever ATS score we parsed (including zeros)
+  useEffect(() => {
+    if (!onAtsScoreUpdate) return;
+    if (!result) {
+      onAtsScoreUpdate(null);
+      return;
     }
-    return null;
-  };
+    const derivedScore = parserScore ?? extractAtsScore(result);
+    onAtsScoreUpdate(derivedScore);
+  }, [result, parserScore, onAtsScoreUpdate]);
 
   const getScoreColor = (score: number) => {
-    if (score >= 80) return '#4caf50';
-    if (score >= 60) return '#ff9800';
-    return '#f44336';
+    if (score >= 80) return '#54f1c5';
+    if (score >= 60) return '#f9a826';
+    return '#fb7185';
   };
 
-  const atsScore = getATSScore();
+  const formatJson = (payload: string) => {
+    try {
+      return JSON.stringify(JSON.parse(payload), null, 2);
+    } catch {
+      return payload;
+    }
+  };
+
+  const atsScore = parserScore ?? extractAtsScore(result);
 
   return (
-    <div style={{ maxWidth: 1000, margin: '0 auto', padding: 20 }}>
-      <h1>📄 Resume Analyzer</h1>
-      <p style={{ color: '#666', marginBottom: 30 }}>
-        Upload your resume (PDF or DOCX) for comprehensive ATS analysis and improvement suggestions
+    <div className="resume-upload">
+      <p className="section-title">Upload Center</p>
+      <h4 style={{ marginTop: 0 }}>Drop your latest resume</h4>
+      <p style={{ color: '#8ea5d9', marginBottom: 24 }}>
+        We’ll parse the document, score it for ATS readiness, and feed the results into the coach.
       </p>
 
-      {/* File Upload Area */}
       <div
+        className={`upload-dropzone ${dragActive ? 'is-active' : ''}`}
         onDragEnter={handleDrag}
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        style={{
-          border: `2px dashed ${dragActive ? '#1976d2' : '#ccc'}`,
-          borderRadius: 8,
-          padding: 40,
-          textAlign: 'center',
-          background: dragActive ? '#e3f2fd' : '#fafafa',
-          marginBottom: 20,
-          cursor: 'pointer'
-        }}
-        onClick={() => document.getElementById('fileInput')?.click()}
+        onClick={() => fileInputRef.current?.click()}
       >
         <input
-          id="fileInput"
+          ref={fileInputRef}
           type="file"
           accept=".pdf,.docx"
           onChange={handleFileChange}
           style={{ display: 'none' }}
         />
-
-        <div style={{ fontSize: 48, marginBottom: 10 }}>📎</div>
-
+        <div className="dropzone-icon">📎</div>
         {file ? (
-          <div>
-            <div style={{ fontWeight: 'bold', color: '#1976d2', marginBottom: 5 }}>
-              {file.name}
-            </div>
-            <div style={{ fontSize: '0.9em', color: '#666' }}>
-              {(file.size / 1024).toFixed(0)} KB
-            </div>
+          <div className="file-meta">
+            <strong>{file.name}</strong>
+            <span>{(file.size / 1024).toFixed(0)} KB</span>
           </div>
         ) : (
-          <div>
-            <div style={{ fontWeight: 'bold', marginBottom: 5 }}>
-              Drag & drop your resume here
-            </div>
-            <div style={{ fontSize: '0.9em', color: '#666' }}>
-              or click to browse (PDF or DOCX, max 5MB)
-            </div>
+          <div className="file-meta">
+            <strong>Drag & drop your resume here</strong>
+            <span>or click to browse (PDF or DOCX)</span>
           </div>
         )}
       </div>
 
-      {/* Optional Target Fields */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15, marginBottom: 20 }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 5, fontWeight: 'bold' }}>
-            Target Role (Optional)
-          </label>
+      <div className="upload-form-grid">
+        <label className="field">
+          <span>Target Role (optional)</span>
           <input
             type="text"
             value={targetRole}
             onChange={(e) => setTargetRole(e.target.value)}
             placeholder="e.g., Senior Software Engineer"
-            style={{
-              width: '100%',
-              padding: 10,
-              borderRadius: 4,
-              border: '1px solid #ccc',
-              fontSize: 14
-            }}
           />
-        </div>
-        <div>
-          <label style={{ display: 'block', marginBottom: 5, fontWeight: 'bold' }}>
-            Target Industry (Optional)
-          </label>
+        </label>
+        <label className="field">
+          <span>Target Industry (optional)</span>
           <input
             type="text"
             value={targetIndustry}
             onChange={(e) => setTargetIndustry(e.target.value)}
             placeholder="e.g., Technology, Finance"
-            style={{
-              width: '100%',
-              padding: 10,
-              borderRadius: 4,
-              border: '1px solid #ccc',
-              fontSize: 14
-            }}
           />
-        </div>
+        </label>
       </div>
 
-      {/* Upload Button */}
       <button
         onClick={handleUpload}
         disabled={!file || loading}
-        style={{
-          width: '100%',
-          padding: 15,
-          fontSize: 16,
-          fontWeight: 'bold',
-          borderRadius: 8,
-          border: 'none',
-          background: !file || loading ? '#ccc' : '#1976d2',
-          color: '#fff',
-          cursor: !file || loading ? 'not-allowed' : 'pointer',
-          marginBottom: 20
-        }}
+        className="primary-action"
       >
-        {loading ? '🔄 Analyzing Resume...' : '🚀 Analyze Resume'}
+        {loading ? 'Analyzing Resume...' : 'Analyze Resume'}
       </button>
 
-      {/* Error Display */}
       {error && (
-        <div style={{
-          padding: 15,
-          background: '#ffebee',
-          border: '1px solid #f44336',
-          borderRadius: 8,
-          color: '#c62828',
-          marginBottom: 20
-        }}>
-          ❌ {error}
+        <div className="alert error">
+          {error}
         </div>
       )}
 
-      {/* Results */}
       {result && (
-        <div>
-          {/* Parse Results */}
-          <div style={{
-            background: '#e8f5e9',
-            border: '1px solid #4caf50',
-            borderRadius: 8,
-            padding: 20,
-            marginBottom: 20
-          }}>
-            <h3 style={{ marginTop: 0 }}>✅ Resume Parsed Successfully</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 15 }}>
+        <div className="upload-results">
+          <div className="result-card success">
+            <div className="result-title">
+              <span className="badge">Scan results</span>
+              <strong>Resume parsed successfully</strong>
+            </div>
+            <div className="result-grid">
               <div>
-                <div style={{ fontSize: '0.85em', color: '#666' }}>Word Count</div>
-                <div style={{ fontSize: '1.5em', fontWeight: 'bold' }}>
-                  {result.parse_result.word_count}
-                </div>
+                <label>Word Count</label>
+                <p>{result.parse_result.word_count}</p>
               </div>
               <div>
-                <div style={{ fontSize: '0.85em', color: '#666' }}>Contact Info</div>
-                <div style={{ fontSize: '1.5em', fontWeight: 'bold' }}>
-                  {result.parse_result.has_contact_info ? '✓' : '✗'}
-                </div>
+                <label>Contact Info</label>
+                <p>{result.parse_result.has_contact_info ? 'Detected' : 'Missing'}</p>
               </div>
               <div>
-                <div style={{ fontSize: '0.85em', color: '#666' }}>Sections Found</div>
-                <div style={{ fontSize: '1.5em', fontWeight: 'bold' }}>
-                  {result.parse_result.detected_sections.length}
-                </div>
+                <label>Sections Found</label>
+                <p>{result.parse_result.detected_sections.length}</p>
               </div>
             </div>
             {result.parse_result.detected_sections.length > 0 && (
-              <div style={{ marginTop: 15 }}>
-                <strong>Detected Sections:</strong>{' '}
-                {result.parse_result.detected_sections.join(', ')}
-              </div>
+              <p className="section-list">
+                Detected sections: {result.parse_result.detected_sections.join(', ')}
+              </p>
             )}
           </div>
 
-          {/* ATS Score */}
           {atsScore !== null && (
-            <div style={{
-              background: '#fff',
-              border: `3px solid ${getScoreColor(atsScore)}`,
-              borderRadius: 8,
-              padding: 20,
-              marginBottom: 20,
-              textAlign: 'center'
-            }}>
-              <h3 style={{ marginTop: 0 }}>ATS Compatibility Score</h3>
-              <div style={{
-                fontSize: '4em',
-                fontWeight: 'bold',
-                color: getScoreColor(atsScore)
-              }}>
-                {atsScore}/100
+            <div className="result-card ats-score">
+              <div className="score-circle" style={{ borderColor: getScoreColor(atsScore) }}>
+                {atsScore}
+                <span>/100</span>
               </div>
-              <div style={{ fontSize: '0.9em', color: '#666' }}>
-                {atsScore >= 80 && '🎉 Excellent! Your resume is highly ATS-compatible'}
-                {atsScore >= 60 && atsScore < 80 && '👍 Good, but there\'s room for improvement'}
-                {atsScore < 60 && '⚠️ Needs significant improvements to pass ATS systems'}
+              <div className="score-details">
+                <h4>ATS Compatibility Score</h4>
+                <div className="score-bar">
+                  <span style={{ width: `${atsScore}%`, background: getScoreColor(atsScore) }} />
+                </div>
+                <small>
+                  {atsScore >= 80 && 'Excellent! Your resume is highly ATS-compatible.'}
+                  {atsScore >= 60 && atsScore < 80 && 'Solid baseline, refine keywords for a boost.'}
+                  {atsScore < 60 && 'Focus on structure and keywords to improve ATS pass rates.'}
+                </small>
               </div>
             </div>
           )}
 
-          {/* Agent Analysis */}
-          <div style={{
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: 8,
-            padding: 20
-          }}>
-            <h3 style={{ marginTop: 0 }}>🤖 AI Analysis & Recommendations</h3>
-            <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+          <div className="result-card analysis">
+            <div className="result-title">
+              <strong>AI Analysis & Recommendations</strong>
+            </div>
+            <div className="analysis-copy">
               {result.agent_analysis.message}
             </div>
 
-            {/* Tools Used */}
-            <details style={{ marginTop: 20 }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 'bold', color: '#1976d2' }}>
-                🔧 View Detailed Tool Results ({result.agent_analysis.tools_used.length} tools used)
+            <details className="tool-accordion">
+              <summary>
+                Tool Results ({result.agent_analysis.tools_used.length})
               </summary>
               {result.agent_analysis.tools_used.map((tool, idx) => (
-                <details key={idx} style={{ marginLeft: 20, marginTop: 10 }}>
-                  <summary style={{ cursor: 'pointer', color: '#f57c00' }}>
-                    {tool.toolName}
-                  </summary>
-                  <pre style={{
-                    background: '#f5f5f5',
-                    padding: 15,
-                    borderRadius: 4,
-                    overflow: 'auto',
-                    fontSize: '0.85em',
-                    maxHeight: 400
-                  }}>
-                    {JSON.stringify(JSON.parse(tool.result), null, 2)}
-                  </pre>
+                <details key={idx}>
+                  <summary>{tool.toolName}</summary>
+                  <div className="tool-details">
+                    <div>
+                      <strong>Arguments</strong>
+                      <pre>{formatJson(tool.arguments)}</pre>
+                    </div>
+                    <div>
+                      <strong>Result</strong>
+                      <pre>{formatJson(tool.result)}</pre>
+                    </div>
+                  </div>
                 </details>
               ))}
             </details>

@@ -5,18 +5,26 @@
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,
-      "applicationUrl": "http://localhost:5298",
+      "applicationUrl": "http://localhost:5001",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "JSEARCH_API_KEY": "d30cc47a66mshdc952453cc27cdap111c39jsn8047878a08b9",
+        "ADZUNA_APP_ID": "924def2d",
+        "ADZUNA_APP_KEY": "d5a2592d36d0342b30ced2591c8a38cf",
+        "THE_MUSE_API_KEY": ""
       }
     },
     "https": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,
-      "applicationUrl": "https://localhost:7114;http://localhost:5298",
+      "applicationUrl": "https://localhost:7114;http://localhost:5001",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "JSEARCH_API_KEY": "d30cc47a66mshdc952453cc27cdap111c39jsn8047878a08b9",
+        "ADZUNA_APP_ID": "924def2d",
+        "ADZUNA_APP_KEY": "d5a2592d36d0342b30ced2591c8a38cf",
+        "THE_MUSE_API_KEY": ""
       }
     }
   }

@@ -5,14 +5,26 @@ using CareerCoach.Services;
 
 var b = WebApplication.CreateBuilder(args);
 b.Configuration.AddEnvironmentVariables();
+b.Services.AddHttpClient();
 b.Services.AddSingleton<GradientClient>();
 b.Services.AddSingleton<Db>();
+b.Services.AddSingleton<JSearchClient>();
+b.Services.AddSingleton<AdzunaClient>();
+b.Services.AddSingleton<TheMuseClient>();
+b.Services.AddSingleton<RemotiveClient>();
+b.Services.AddSingleton<JobAggregatorService>();
 b.Services.AddSingleton<CareerCoachAgent>();
 b.Services.AddSingleton<ResumeParser>();
+b.Services.AddSingleton<AuthService>();
 b.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
 
 var app = b.Build();
 app.UseCors();
+
+// Ensure auth tables exist on startup (non-fatal if DB is temporarily unavailable)
+var db = app.Services.GetRequiredService<Db>();
+try { await db.EnsureAuthTablesAsync(); }
+catch (Exception ex) { Console.WriteLine($"[WARN] Could not ensure auth tables: {ex.Message}"); }
 
 app.MapGet("/", () => "API up");
 
@@ -52,7 +64,7 @@ app.MapPost("/api/resume/analyze", async (
     Analyze r) =>
 {
     var sys =
-      "You are a resume analyzer. Return ONLY valid JSON with keys: " +
+      "You are a resume analyzer. Analyze the resume for ATS compatibility and return an ATS score on a scale of 1-100, with 100 being the highest compatibility. Return ONLY valid JSON with keys: " +
       "skills (string[]), tools (string[]), roles (string[]), summary (string). " +
       "No markdown fences, no commentary.";
 
@@ -214,18 +226,20 @@ app.MapPost("/api/resume/upload", async (
         return Results.BadRequest(new { error = "File size exceeds 5MB limit" });
     }
 
-    var allowedExtensions = new[] { ".pdf", ".docx" };
-    var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
-    if (!allowedExtensions.Contains(extension))
+    using var bufferedStream = new MemoryStream();
+    await file.CopyToAsync(bufferedStream);
+    bufferedStream.Position = 0;
+
+    if (!ResumeFileValidator.TryNormalizeFileMetadata(file, bufferedStream, out var normalizedFileName, out var validationError))
     {
-        return Results.BadRequest(new { error = "Only PDF and DOCX files are supported" });
+        return Results.BadRequest(new { error = validationError ?? "Only PDF and DOCX files are supported" });
     }
 
     try
     {
         // Parse the resume file
-        using var stream = file.OpenReadStream();
-        var parseResult = await parser.ParseResumeAsync(stream, file.FileName);
+        bufferedStream.Position = 0;
+        var parseResult = await parser.ParseResumeAsync(bufferedStream, normalizedFileName);
 
         if (!parseResult.Success)
         {
@@ -266,7 +280,8 @@ app.MapPost("/api/resume/upload", async (
                 has_sections = parseResult.HasSections,
                 detected_sections = parseResult.DetectedSections,
                 file_name = parseResult.FileName,
-                file_type = parseResult.FileType
+                file_type = parseResult.FileType,
+                ats_score = parseResult.AtsScore
             },
             agent_analysis = new
             {
@@ -294,8 +309,108 @@ app.MapPost("/api/resume/upload", async (
     }
 }).DisableAntiforgery(); // Disable antiforgery for file upload
 
+app.MapGet("/api/jobs/search", async (
+    [FromServices] JobAggregatorService aggregator,
+    string? query,
+    string? location,
+    bool remoteOnly = false,
+    string? experienceLevel = null,
+    string? employmentType = null) =>
+{
+    var q = string.IsNullOrWhiteSpace(query) ? "software engineer" : query.Trim();
+    var loc = location?.Trim().Equals("remote", StringComparison.OrdinalIgnoreCase) == true ? null : location?.Trim();
+
+    var result = await aggregator.SearchAllAsync(q, loc, remoteOnly, experienceLevel, employmentType);
+    return Results.Ok(new
+    {
+        totalResults = result.TotalResults,
+        jobs = result.Jobs.Select(j => new
+        {
+            title = j.Title,
+            company = j.Company,
+            logoUrl = j.LogoUrl,
+            location = j.Location,
+            isRemote = j.IsRemote,
+            employmentType = j.EmploymentType,
+            minSalary = j.MinSalary,
+            maxSalary = j.MaxSalary,
+            salaryCurrency = j.SalaryCurrency,
+            salaryPeriod = j.SalaryPeriod,
+            descriptionSnippet = j.DescriptionSnippet,
+            applyLink = j.ApplyLink,
+            postedAt = j.PostedAt
+        })
+    });
+});
+
+// ── Auth endpoints ──────────────────────────────────────────────────────────
+
+app.MapPost("/api/auth/register", async (
+    [FromServices] AuthService auth,
+    [FromBody] RegisterRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password)
+        || string.IsNullOrWhiteSpace(req.FirstName) || string.IsNullOrWhiteSpace(req.LastName))
+        return Results.BadRequest(new { error = "All fields are required." });
+
+    try
+    {
+        var (token, user) = await auth.RegisterAsync(req.Email, req.Password, req.FirstName, req.LastName);
+        return Results.Ok(new { token, user = new { user.Id, user.Email, user.FirstName, user.LastName } });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Register failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Registration error");
+    }
+});
+
+app.MapPost("/api/auth/login", async (
+    [FromServices] AuthService auth,
+    [FromBody] LoginRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+        return Results.BadRequest(new { error = "Email and password are required." });
+
+    try
+    {
+        var (token, user) = await auth.LoginAsync(req.Email, req.Password);
+        return Results.Ok(new { token, user = new { user.Id, user.Email, user.FirstName, user.LastName } });
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return Results.Unauthorized();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Login failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Login error");
+    }
+});
+
+app.MapGet("/api/auth/me", async (
+    [FromServices] AuthService auth,
+    HttpContext ctx) =>
+{
+    var header = ctx.Request.Headers.Authorization.FirstOrDefault();
+    if (header == null || !header.StartsWith("Bearer "))
+        return Results.Unauthorized();
+
+    var token = header["Bearer ".Length..];
+    var user = await auth.ValidateTokenAsync(token);
+    if (user == null) return Results.Unauthorized();
+
+    return Results.Ok(new { user.Id, user.Email, user.FirstName, user.LastName });
+});
+
 app.Run();
 
 record Prompt(string prompt);
 record Analyze(string userId, string resumeText);
 record AgentChatRequest(string UserId, string Message, string? ConversationId);
+record RegisterRequest(string Email, string Password, string FirstName, string LastName);
+record LoginRequest(string Email, string Password);

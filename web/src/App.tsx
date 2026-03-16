@@ -1,51 +1,1092 @@
-import { useState } from 'react'
-import AgentChat from './AgentChat'
-import ResumeUpload from './ResumeUpload'
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import AgentChat from './AgentChat';
+import Assessment from './Assessment';
+import Jobs from './Jobs';
+import ResumeUpload from './ResumeUpload';
+import type { User } from './Login';
 
-export default function App() {
-  const [view, setView] = useState<'chat' | 'resume'>('resume')
+function loadStoredAtsScore(userId: string) {
+  if (typeof window === 'undefined') return null;
+  const stored = window.localStorage.getItem(`atsScore:${userId}`);
+  const parsed = stored ? Number.parseInt(stored, 10) : NaN;
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+type ActiveTab = 'dashboard' | 'jobs' | 'assessment' | 'resources';
+
+type IndustryId =
+  | 'software-development'
+  | 'platforms-ops'
+  | 'data-ai'
+  | 'security'
+  | 'product-design'
+  | 'customer-solutions'
+  | 'enterprise-domain';
+
+interface IndustryOption {
+  id: IndustryId;
+  label: string;
+  focus: string;
+  signal: string;
+}
+
+interface ResourceItem {
+  title: string;
+  provider: string;
+  format: string;
+  level: string;
+  duration: string;
+  link: string;
+  industries: IndustryId[];
+  tags: string[];
+}
+
+interface ResourceCategory {
+  id: string;
+  title: string;
+  description: string;
+  items: ResourceItem[];
+}
+
+interface AppProps {
+  user: User;
+  onLogout: () => void;
+}
+
+export default function App({ user, onLogout }: AppProps) {
+  const resumeSectionRef = useRef<HTMLDivElement | null>(null);
+  const chatSectionRef = useRef<HTMLDivElement | null>(null);
+  const [atsScore, setAtsScore] = useState<number | null>(() => loadStoredAtsScore(user.id));
+  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [selectedIndustry, setSelectedIndustry] = useState<IndustryId | 'all'>('all');
+
+  const industryOptions: IndustryOption[] = [
+    {
+      id: 'software-development',
+      label: 'Software Development & Applications',
+      focus: 'Full-stack delivery, APIs, QA, and shipping cadence.',
+      signal: 'Build + ship + iterate'
+    },
+    {
+      id: 'platforms-ops',
+      label: 'Platforms & Operations',
+      focus: 'Infrastructure, reliability, automation, and enablement.',
+      signal: 'Scale + automate + harden'
+    },
+    {
+      id: 'data-ai',
+      label: 'Data, AI, & Analytics',
+      focus: 'Data modeling, ML, experimentation, and storytelling.',
+      signal: 'Measure + model + learn'
+    },
+    {
+      id: 'security',
+      label: 'Security',
+      focus: 'Threat modeling, AppSec, compliance, and governance.',
+      signal: 'Protect + govern + audit'
+    },
+    {
+      id: 'product-design',
+      label: 'Product Design & Delivery',
+      focus: 'Research, prototyping, design systems, and outcomes.',
+      signal: 'Discover + design + launch'
+    },
+    {
+      id: 'customer-solutions',
+      label: 'Customer Solutions',
+      focus: 'Implementation, success, enablement, and expansion.',
+      signal: 'Adopt + retain + grow'
+    },
+    {
+      id: 'enterprise-domain',
+      label: 'Enterprise & Domain Tech',
+      focus: 'Vertical tech, domain depth, and enterprise system integration.',
+      signal: 'Specialize + integrate + comply'
+    }
+  ];
+
+  const resourceCategories: ResourceCategory[] = [
+    {
+      id: 'certifications',
+      title: 'Certifications',
+      description: 'Role-aligned credentials hiring teams recognize.',
+      items: [
+        {
+          title: 'AWS Certified Solutions Architect - Associate',
+          provider: 'AWS Training',
+          format: 'Exam + prep',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://aws.amazon.com/certification/certified-solutions-architect-associate/',
+          industries: ['platforms-ops', 'enterprise-domain'],
+          tags: ['Cloud', 'Architecture', 'Reliability']
+        },
+        {
+          title: 'Google Professional Data Engineer',
+          provider: 'Google Cloud',
+          format: 'Exam + labs',
+          level: 'Advanced',
+          duration: '8-12 weeks',
+          link: 'https://cloud.google.com/certification/data-engineer',
+          industries: ['data-ai'],
+          tags: ['Data', 'Pipelines', 'ML']
+        },
+        {
+          title: 'IBM Data Science Professional Certificate',
+          provider: 'Coursera',
+          format: 'Exam + labs',
+          level: 'Intermediate',
+          duration: '3-6 months',
+          link: 'https://www.coursera.org/professional-certificates/ibm-data-science',
+          industries: ['data-ai'],
+          tags: ['Python', 'ML', 'Statistics']
+        },
+        {
+          title: 'AWS Machine Learning – Specialty',
+          provider: 'AWS Training',
+          format: 'Exam + prep',
+          level: 'Advanced',
+          duration: '10-14 weeks',
+          link: 'https://aws.amazon.com/certification/certified-machine-learning-specialty/',
+          industries: ['data-ai'],
+          tags: ['ML', 'SageMaker', 'Modeling']
+        },
+        {
+          title: 'Certified Information Systems Security Professional (CISSP)',
+          provider: '(ISC)2',
+          format: 'Exam',
+          level: 'Advanced',
+          duration: '10-14 weeks',
+          link: 'https://www.isc2.org/certifications/cissp',
+          industries: ['security', 'enterprise-domain'],
+          tags: ['Governance', 'Risk', 'Compliance']
+        },
+        {
+          title: 'CompTIA Security+',
+          provider: 'CompTIA',
+          format: 'Exam',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://www.comptia.org/certifications/security',
+          industries: ['security'],
+          tags: ['Network Security', 'Threats', 'Cryptography']
+        },
+        {
+          title: 'Certified Ethical Hacker (CEH)',
+          provider: 'EC-Council',
+          format: 'Exam + labs',
+          level: 'Advanced',
+          duration: '8-12 weeks',
+          link: 'https://www.eccouncil.org/programs/certified-ethical-hacker-ceh/',
+          industries: ['security'],
+          tags: ['Pentesting', 'Exploits', 'Red Team']
+        },
+        {
+          title: 'Certified Scrum Product Owner (CSPO)',
+          provider: 'Scrum Alliance',
+          format: 'Workshop',
+          level: 'Intermediate',
+          duration: '2-4 days',
+          link: 'https://www.scrumalliance.org/get-certified/product-owner-track/certified-scrum-product-owner',
+          industries: ['product-design', 'customer-solutions'],
+          tags: ['Product', 'Agile', 'Leadership']
+        },
+        {
+          title: 'ITIL 4 Foundation',
+          provider: 'AXELOS',
+          format: 'Exam',
+          level: 'Beginner',
+          duration: '4-6 weeks',
+          link: 'https://www.axelos.com/',
+          industries: ['customer-solutions'],
+          tags: ['Service Management', 'ITSM', 'Delivery']
+        },
+        {
+          title: 'Professional Scrum Master I (PSM I)',
+          provider: 'Scrum.org',
+          format: 'Exam',
+          level: 'Intermediate',
+          duration: '2-4 weeks',
+          link: 'https://www.scrum.org/',
+          industries: ['product-design'],
+          tags: ['Scrum', 'Agile', 'Facilitation']
+        },
+        {
+          title: 'Project Management Professional (PMP)',
+          provider: 'PMI',
+          format: 'Exam + prep',
+          level: 'Advanced',
+          duration: '8-12 weeks',
+          link: 'https://www.pmi.org/certifications/project-management-pmp',
+          industries: ['product-design', 'customer-solutions'],
+          tags: ['PM', 'Delivery', 'Stakeholders']
+        },
+        {
+          title: 'AWS Certified Developer – Associate',
+          provider: 'AWS Training',
+          format: 'Exam + prep',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://aws.amazon.com/certification/certified-developer-associate/',
+          industries: ['software-development'],
+          tags: ['APIs', 'Lambda', 'DevOps']
+        },
+        {
+          title: 'Oracle Certified Professional: Java SE',
+          provider: 'Oracle',
+          format: 'Exam',
+          level: 'Intermediate',
+          duration: '8-12 weeks',
+          link: 'https://education.oracle.com/java-se/',
+          industries: ['software-development'],
+          tags: ['Java', 'OOP', 'Backend']
+        },
+        {
+          title: 'Microsoft Certified: Azure Developer Associate',
+          provider: 'Microsoft',
+          format: 'Exam + labs',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://learn.microsoft.com/certifications/azure-developer/',
+          industries: ['software-development'],
+          tags: ['Azure', 'APIs', 'Cloud']
+        },
+        {
+          title: 'CompTIA A+',
+          provider: 'CompTIA',
+          format: 'Exam',
+          level: 'Beginner → Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://www.comptia.org/certifications/a',
+          industries: ['platforms-ops'],
+          tags: ['Hardware', 'Troubleshooting', 'IT Support']
+        },
+        {
+          title: 'CompTIA Linux+',
+          provider: 'CompTIA',
+          format: 'Exam',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://www.comptia.org/certifications/linux',
+          industries: ['platforms-ops'],
+          tags: ['Linux', 'CLI', 'Sysadmin']
+        },
+        {
+          title: 'Red Hat Certified System Administrator (RHCSA)',
+          provider: 'Red Hat',
+          format: 'Exam + labs',
+          level: 'Advanced',
+          duration: '8-12 weeks',
+          link: 'https://www.redhat.com/en/services/certification',
+          industries: ['platforms-ops'],
+          tags: ['RHEL', 'Linux', 'Sysadmin']
+        },
+        {
+          title: 'AWS Certified Cloud Practitioner',
+          provider: 'AWS Training',
+          format: 'Exam + prep',
+          level: 'Beginner',
+          duration: '4-6 weeks',
+          link: 'https://aws.amazon.com/certification/certified-cloud-practitioner/',
+          industries: ['platforms-ops', 'enterprise-domain'],
+          tags: ['Cloud Basics', 'AWS', 'Billing']
+        },
+        {
+          title: 'Microsoft Azure Administrator (AZ-104)',
+          provider: 'Microsoft',
+          format: 'Exam + labs',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://learn.microsoft.com/certifications/azure-administrator/',
+          industries: ['platforms-ops'],
+          tags: ['Azure', 'Identity', 'Infrastructure']
+        },
+        {
+          title: 'Google Professional Cloud Architect',
+          provider: 'Google Cloud',
+          format: 'Exam + prep',
+          level: 'Advanced',
+          duration: '8-12 weeks',
+          link: 'https://cloud.google.com/certification/cloud-architect',
+          industries: ['platforms-ops', 'enterprise-domain'],
+          tags: ['GCP', 'Architecture', 'Scalability']
+        },
+        {
+          title: 'CompTIA Network+',
+          provider: 'CompTIA',
+          format: 'Exam',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://www.comptia.org/certifications/network',
+          industries: ['platforms-ops'],
+          tags: ['Networking', 'Protocols', 'Troubleshooting']
+        },
+        {
+          title: 'Cisco CCNA',
+          provider: 'Cisco',
+          format: 'Exam + labs',
+          level: 'Intermediate',
+          duration: '8-12 weeks',
+          link: 'https://www.cisco.com/c/en/us/training-events/training-certifications/certifications/associate/ccna.html',
+          industries: ['platforms-ops'],
+          tags: ['Routing', 'Switching', 'Networking']
+        },
+        {
+          title: 'LPIC-1 (Linux Professional Institute)',
+          provider: 'Linux Professional Institute',
+          format: 'Exam',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://www.lpi.org/',
+          industries: ['platforms-ops'],
+          tags: ['Linux', 'Commands', 'System Admin']
+        },
+        {
+          title: 'Salesforce Certified Administrator',
+          provider: 'Salesforce',
+          format: 'Exam + prep',
+          level: 'Intermediate',
+          duration: '6-10 weeks',
+          link: 'https://trailhead.salesforce.com/credentials/administrator',
+          industries: ['enterprise-domain'],
+          tags: ['CRM', 'Salesforce', 'Configuration']
+        },
+        {
+          title: 'ServiceNow Certified System Administrator (CSA)',
+          provider: 'ServiceNow',
+          format: 'Exam + labs',
+          level: 'Intermediate',
+          duration: '4-8 weeks',
+          link: 'https://www.servicenow.com/services/training-and-certification.html',
+          industries: ['enterprise-domain'],
+          tags: ['ITSM', 'ServiceNow', 'Workflows']
+        }
+      ]
+    },
+    {
+      id: 'free-courses',
+      title: 'Free Courses',
+      description: 'No-cost upskilling that maps to skill gaps fast.',
+      items: [
+        {
+          title: 'Full Stack Open',
+          provider: 'University of Helsinki',
+          format: 'Course',
+          level: 'Intermediate',
+          duration: '8-12 weeks',
+          link: 'https://fullstackopen.com/en/',
+          industries: ['software-development'],
+          tags: ['React', 'Node', 'API']
+        },
+        {
+          title: 'freeCodeCamp Full Curriculum',
+          provider: 'freeCodeCamp',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://www.freecodecamp.org/',
+          industries: ['software-development'],
+          tags: ['JavaScript', 'React', 'Web']
+        },
+        {
+          title: 'CS50: Introduction to Computer Science',
+          provider: 'Harvard University',
+          format: 'Course',
+          level: 'Beginner',
+          duration: '12 weeks',
+          link: 'https://cs50.harvard.edu/',
+          industries: ['software-development'],
+          tags: ['C', 'Python', 'Algorithms']
+        },
+        {
+          title: 'The Odin Project',
+          provider: 'The Odin Project',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://www.theodinproject.com/',
+          industries: ['software-development'],
+          tags: ['HTML', 'CSS', 'JavaScript']
+        },
+        {
+          title: 'Google Data Analytics Professional Certificate',
+          provider: 'Coursera',
+          format: 'Course',
+          level: 'Beginner',
+          duration: '8 weeks',
+          link: 'https://www.coursera.org/professional-certificates/google-data-analytics',
+          industries: ['data-ai', 'enterprise-domain'],
+          tags: ['Analytics', 'SQL', 'Dashboards']
+        },
+        {
+          title: 'Python for Everybody',
+          provider: 'Coursera',
+          format: 'Course',
+          level: 'Beginner',
+          duration: '3 months',
+          link: 'https://www.coursera.org/specializations/python',
+          industries: ['data-ai'],
+          tags: ['Python', 'Data', 'APIs']
+        },
+        {
+          title: 'freeCodeCamp Data Analysis Certification',
+          provider: 'freeCodeCamp',
+          format: 'Course',
+          level: 'Intermediate',
+          duration: 'Self-paced',
+          link: 'https://www.freecodecamp.org/',
+          industries: ['data-ai'],
+          tags: ['Python', 'Pandas', 'NumPy']
+        },
+        {
+          title: 'Site Reliability Engineering (SRE) Fundamentals',
+          provider: 'Google Cloud',
+          format: 'Course',
+          level: 'Intermediate',
+          duration: '4-6 weeks',
+          link: 'https://cloud.google.com/sre',
+          industries: ['platforms-ops'],
+          tags: ['SRE', 'SLIs', 'On-call']
+        },
+        {
+          title: 'Google IT Support Professional Certificate',
+          provider: 'Coursera',
+          format: 'Course',
+          level: 'Beginner',
+          duration: '6 months',
+          link: 'https://www.coursera.org/professional-certificates/google-it-support',
+          industries: ['platforms-ops'],
+          tags: ['Networking', 'Troubleshooting', 'Support']
+        },
+        {
+          title: 'Cisco Networking Basics',
+          provider: 'Cisco Networking Academy',
+          format: 'Course',
+          level: 'Beginner',
+          duration: 'Self-paced',
+          link: 'https://www.netacad.com/',
+          industries: ['platforms-ops'],
+          tags: ['Networking', 'TCP/IP', 'Routing']
+        },
+        {
+          title: 'IBM SkillsBuild IT Support Courses',
+          provider: 'IBM SkillsBuild',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://skillsbuild.org/',
+          industries: ['platforms-ops'],
+          tags: ['IT Support', 'Infrastructure', 'Tools']
+        },
+        {
+          title: 'Cisco Introduction to Cybersecurity',
+          provider: 'Cisco Networking Academy',
+          format: 'Course',
+          level: 'Beginner',
+          duration: 'Self-paced',
+          link: 'https://www.netacad.com/',
+          industries: ['security'],
+          tags: ['Threats', 'Network Defense', 'Fundamentals']
+        },
+        {
+          title: 'OWASP Web Security Academy (WebGoat)',
+          provider: 'OWASP',
+          format: 'Course',
+          level: 'Intermediate',
+          duration: 'Self-paced',
+          link: 'https://owasp.org/www-project-webgoat/',
+          industries: ['security'],
+          tags: ['AppSec', 'Vulnerabilities', 'Hands-on']
+        },
+        {
+          title: 'TryHackMe',
+          provider: 'TryHackMe',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://tryhackme.com/',
+          industries: ['security'],
+          tags: ['CTF', 'Pentesting', 'Labs']
+        },
+        {
+          title: 'UX Research & Design Fundamentals',
+          provider: 'Interaction Design Foundation',
+          format: 'Course',
+          level: 'Beginner',
+          duration: '6 weeks',
+          link: 'https://www.interaction-design.org/',
+          industries: ['product-design', 'customer-solutions'],
+          tags: ['Research', 'Design', 'Prototyping']
+        },
+        {
+          title: 'Google Digital Garage',
+          provider: 'Google',
+          format: 'Course',
+          level: 'Beginner',
+          duration: 'Self-paced',
+          link: 'https://learndigital.withgoogle.com/digitalgarage',
+          industries: ['customer-solutions'],
+          tags: ['Digital Skills', 'Marketing', 'Business']
+        },
+        {
+          title: 'Agile & Leadership Courses',
+          provider: 'Coursera',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://www.coursera.org/',
+          industries: ['product-design'],
+          tags: ['Agile', 'Leadership', 'Strategy']
+        },
+        {
+          title: 'PMI Project Management Basics',
+          provider: 'PMI',
+          format: 'Course',
+          level: 'Beginner',
+          duration: 'Self-paced',
+          link: 'https://www.pmi.org/',
+          industries: ['product-design', 'customer-solutions'],
+          tags: ['PM Basics', 'Scope', 'Planning']
+        },
+        {
+          title: 'AWS Cloud Practitioner Essentials',
+          provider: 'AWS Skill Builder',
+          format: 'Course',
+          level: 'Beginner',
+          duration: 'Self-paced',
+          link: 'https://explore.skillbuilder.aws/',
+          industries: ['platforms-ops', 'enterprise-domain'],
+          tags: ['Cloud', 'AWS', 'Fundamentals']
+        },
+        {
+          title: 'Microsoft Learn – Azure Fundamentals',
+          provider: 'Microsoft',
+          format: 'Course',
+          level: 'Beginner',
+          duration: 'Self-paced',
+          link: 'https://learn.microsoft.com/',
+          industries: ['platforms-ops', 'enterprise-domain'],
+          tags: ['Azure', 'Cloud', 'Microsoft']
+        },
+        {
+          title: 'Google Cloud Skills Boost',
+          provider: 'Google Cloud',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://cloud.google.com/training',
+          industries: ['platforms-ops'],
+          tags: ['GCP', 'Labs', 'Cloud']
+        },
+        {
+          title: 'OpenHPI IT Systems Courses',
+          provider: 'openHPI',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://open.hpi.de/',
+          industries: ['platforms-ops'],
+          tags: ['Systems', 'IT', 'Digital']
+        },
+        {
+          title: 'Salesforce Trailhead',
+          provider: 'Salesforce',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://trailhead.salesforce.com/',
+          industries: ['enterprise-domain'],
+          tags: ['CRM', 'Salesforce', 'Enterprise']
+        },
+        {
+          title: 'openSAP',
+          provider: 'SAP',
+          format: 'Course',
+          level: 'Beginner → Intermediate',
+          duration: 'Self-paced',
+          link: 'https://open.sap.com/',
+          industries: ['enterprise-domain'],
+          tags: ['SAP', 'ERP', 'Enterprise']
+        }
+      ]
+    },
+    {
+      id: 'resume-templates',
+      title: 'Resume Templates',
+      description: 'Modern layouts tuned for ATS and storytelling.',
+      items: [
+        {
+          title: 'ATS-Friendly Resume Templates',
+          provider: 'Canva',
+          format: 'Templates',
+          level: 'All levels',
+          duration: '1 hour',
+          link: 'https://www.canva.com/resumes/templates/',
+          industries: [
+            'software-development',
+            'platforms-ops',
+            'data-ai',
+            'security',
+            'product-design',
+            'customer-solutions',
+            'enterprise-domain'
+          ],
+          tags: ['Design', 'ATS', 'Layout']
+        },
+        {
+          title: 'Tech Resume Templates',
+          provider: 'Overleaf',
+          format: 'Templates',
+          level: 'All levels',
+          duration: '1 hour',
+          link: 'https://www.overleaf.com/latex/templates/tagged/cv',
+          industries: ['software-development', 'platforms-ops', 'data-ai', 'security'],
+          tags: ['LaTeX', 'Structure', 'Clarity']
+        },
+        {
+          title: 'Case Study Resume Format',
+          provider: 'Figma Community',
+          format: 'Template',
+          level: 'Mid-Senior',
+          duration: '2 hours',
+          link: 'https://www.figma.com/community',
+          industries: ['product-design', 'customer-solutions'],
+          tags: ['Portfolio', 'Story', 'Impact']
+        }
+      ]
+    },
+    {
+      id: 'interview-prep',
+      title: 'Interview Prep',
+      description: 'Practice drills and question banks by role.',
+      items: [
+        {
+          title: 'System Design Primer',
+          provider: 'GitHub',
+          format: 'Playbook',
+          level: 'Intermediate',
+          duration: 'Ongoing',
+          link: 'https://github.com/donnemartin/system-design-primer',
+          industries: ['software-development', 'platforms-ops'],
+          tags: ['Architecture', 'Scalability', 'Design']
+        },
+        {
+          title: 'Data Science Interview Guide',
+          provider: 'Interview Query',
+          format: 'Guide',
+          level: 'Intermediate',
+          duration: '4 weeks',
+          link: 'https://www.interviewquery.com/',
+          industries: ['data-ai'],
+          tags: ['SQL', 'Stats', 'ML']
+        },
+        {
+          title: 'Security Interview Questions',
+          provider: 'OWASP',
+          format: 'Checklist',
+          level: 'Intermediate',
+          duration: '2 weeks',
+          link: 'https://owasp.org/',
+          industries: ['security'],
+          tags: ['Threats', 'AppSec', 'Controls']
+        },
+        {
+          title: 'Product Design Interview Prep',
+          provider: 'Designlab',
+          format: 'Guide',
+          level: 'Intermediate',
+          duration: '3-4 weeks',
+          link: 'https://designlab.com/',
+          industries: ['product-design'],
+          tags: ['Case Study', 'Narrative', 'Critique']
+        }
+      ]
+    },
+    {
+      id: 'portfolio-projects',
+      title: 'Portfolio & Projects',
+      description: 'Hands-on projects to prove impact fast.',
+      items: [
+        {
+          title: 'Build a Production-Ready API',
+          provider: 'API Academy',
+          format: 'Project',
+          level: 'Intermediate',
+          duration: '2 weeks',
+          link: 'https://www.postman.com/',
+          industries: ['software-development'],
+          tags: ['API', 'Docs', 'Testing']
+        },
+        {
+          title: 'Analytics Dashboard Starter Kit',
+          provider: 'Data Studio',
+          format: 'Project',
+          level: 'Beginner',
+          duration: '1 week',
+          link: 'https://lookerstudio.google.com/',
+          industries: ['data-ai', 'customer-solutions'],
+          tags: ['Dashboards', 'Insights', 'Storytelling']
+        },
+        {
+          title: 'Incident Response Tabletop',
+          provider: 'CISA',
+          format: 'Simulation',
+          level: 'Intermediate',
+          duration: '1 week',
+          link: 'https://www.cisa.gov/',
+          industries: ['security', 'platforms-ops'],
+          tags: ['Response', 'Playbooks', 'Coordination']
+        },
+        {
+          title: 'Vertical Market Case Study',
+          provider: 'Notion Templates',
+          format: 'Template',
+          level: 'All levels',
+          duration: '2 hours',
+          link: 'https://www.notion.so/templates',
+          industries: ['enterprise-domain', 'customer-solutions'],
+          tags: ['Domain', 'ROI', 'Narrative']
+        }
+      ]
+    }
+  ];
+
+  const filteredCategories = resourceCategories.map(category => ({
+    ...category,
+    items:
+      selectedIndustry === 'all'
+        ? category.items
+        : category.items.filter(item => item.industries.includes(selectedIndustry))
+  }));
+
+  const totalResources = filteredCategories.reduce((sum, category) => sum + category.items.length, 0);
+  const selectedIndustryLabel =
+    selectedIndustry === 'all'
+      ? 'All industries'
+      : industryOptions.find(option => option.id === selectedIndustry)?.label ?? 'Selected industry';
+
+  const quickActions = [
+    { label: 'Upload Resume', description: 'Refresh your ATS scan', accent: 'primary', action: () => scrollToSection(resumeSectionRef) },
+    { label: 'Talk to Coach', description: 'Mock interview & insights', action: () => scrollToSection(chatSectionRef) },
+    { label: 'Skills Courses', description: 'Close your gaps faster' }
+  ];
+
+  const navItems = [
+    { label: 'Dashboard', key: 'dashboard', tab: 'dashboard' as const },
+    { label: 'Jobs', key: 'jobs', tab: 'jobs' as const },
+    { label: 'Assessment', key: 'assessment', tab: 'assessment' as const },
+    { label: 'Resources', key: 'resources', tab: 'resources' as const }
+  ];
+
+  const readinessStats = [
+    { label: 'Readiness', value: '78%', meta: '+12% this week' },
+    { label: 'Matched Jobs', value: '156', meta: '24 new matches' },
+    { label: 'Skills Done', value: '5 / 8', meta: 'In progress' }
+  ];
+
+  const progress = [
+    { label: 'Profile', value: 80, color: 'linear-gradient(90deg,#3ac1ff,#22d3ee)' },
+    { label: 'Skills', value: 65, color: 'linear-gradient(90deg,#34d399,#4ade80)' },
+    { label: 'Interview', value: 45, color: 'linear-gradient(90deg,#fb7185,#f97316)' }
+  ];
+
+  const matches = [
+    { title: 'Senior Product Designer', company: 'TechCorp • Remote', score: '95%' },
+    { title: 'Lead Frontend Engineer', company: 'Orbit Labs • Hybrid', score: '92%' }
+  ];
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const key = `atsScore:${user.id}`;
+    if (atsScore === null) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, String(atsScore));
+  }, [atsScore]);
+
+  const handleAtsScoreUpdate = (score: number | null) => {
+    if (score === null) {
+      setAtsScore(null);
+      return;
+    }
+    setAtsScore(Math.min(100, Math.max(0, score)));
+  };
+
+  function scrollToSection(ref: RefObject<HTMLDivElement | null>) {
+    if (ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
 
   return (
-    <div>
-      <nav style={{
-        background: '#1976d2',
-        padding: '15px 20px',
-        color: '#fff',
-        display: 'flex',
-        gap: 20,
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-      }}>
-        <button
-          onClick={() => setView('resume')}
-          style={{
-            padding: '10px 20px',
-            background: view === 'resume' ? '#fff' : 'transparent',
-            color: view === 'resume' ? '#1976d2' : '#fff',
-            border: '2px solid #fff',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-        >
-          📄 Resume Upload
-        </button>
-        <button
-          onClick={() => setView('chat')}
-          style={{
-            padding: '10px 20px',
-            background: view === 'chat' ? '#fff' : 'transparent',
-            color: view === 'chat' ? '#1976d2' : '#fff',
-            border: '2px solid #fff',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontWeight: 'bold'
-          }}
-        >
-          💬 AI Career Coach
-        </button>
-      </nav>
+    <div className="app-shell">
+      <header className="top-nav">
+        <div className="nav-brand">
+          <img src="/Nextwavelogo.png" alt="NextWave Insights" className="nav-logo" />
+          <div>
+            <h1 className="nav-app-name">GitHired</h1>
+            <small className="nav-company">by NextWave Insights</small>
+          </div>
+        </div>
 
-      {view === 'resume' ? <ResumeUpload /> : <AgentChat />}
+        <nav className="nav-links">
+          {navItems.map(item => {
+            const isActive = activeTab === item.tab;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={isActive ? 'active' : ''}
+                onClick={() => setActiveTab(item.tab)}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="nav-profile">
+          <span className="nav-pill status-pill">● System Active</span>
+          <div className="nav-brand-icon" aria-label="User initials" style={{ cursor: 'default' }}>
+            {user.firstName[0]}{user.lastName[0]}
+          </div>
+          <button type="button" className="ghost-button" onClick={onLogout} style={{ fontSize: '0.8rem', padding: '6px 12px' }}>
+            Sign Out
+          </button>
+        </div>
+      </header>
+
+      {activeTab === 'dashboard' ? (
+        <>
+          <section className="dashboard-hero">
+            <div className="hero-text">
+              <div className="status-pill">SYSTEM ACTIVE</div>
+              <h2>Welcome back, {user.firstName}</h2>
+              <p style={{ color: '#8ea5d9', maxWidth: 420 }}>
+                Your career readiness improved by <span className="trend-positive">+12%</span> this week.
+                Keep up the momentum by refining your resume and exploring new roles.
+              </p>
+            </div>
+            <div className="hero-metrics">
+              <div className="hero-metric">
+                <div className="hero-metric-label">ATS Compatibility</div>
+                <div className="hero-score">{atsScore !== null ? `${atsScore}%` : '—'}</div>
+                <div style={{ color: '#22d3ee' }}>
+                  {atsScore !== null ? 'Scan results ready' : 'Upload a resume to get your ATS score'}
+                </div>
+              </div>
+              <div className="hero-metric">
+                <div className="hero-metric-label">Next Action</div>
+                <div className="hero-score">Upload</div>
+                <button className="ghost-button" onClick={() => scrollToSection(resumeSectionRef)}>
+                  Upload New Resume
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <div className="dashboard-grid">
+            <aside className="stats-grid">
+              {readinessStats.map(stat => (
+                <div className="stat-card" key={stat.label}>
+                  <div className="stat-label">{stat.label}</div>
+                  <div className="stat-value">{stat.value}</div>
+                  <div className="trend-positive">{stat.meta}</div>
+                </div>
+              ))}
+            </aside>
+
+            <section>
+              <div className="card" ref={resumeSectionRef}>
+                <ResumeUpload userId={user.id} onAtsScoreUpdate={handleAtsScoreUpdate} />
+              </div>
+
+              <div className="card top-matches">
+                <div className="resume-card-header" style={{ borderBottom: 'none', padding: 0, marginBottom: 16 }}>
+                  <div>
+                    <p className="section-title">Top Matches</p>
+                    <h3>Recommended Roles</h3>
+                  </div>
+                  <button className="ghost-button">View all</button>
+                </div>
+                {matches.map(match => (
+                  <div className="match-card" key={match.title}>
+                    <div>
+                      <strong>{match.title}</strong>
+                      <p style={{ margin: '6px 0 0', color: '#8ea5d9' }}>{match.company}</p>
+                    </div>
+                    <span className="badge">{match.score}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="right-column">
+              <div className="card">
+                <p className="section-title">Quick Actions</p>
+                <div className="quick-actions">
+                  {quickActions.map(action => (
+                    <button
+                      key={action.label}
+                      className={`quick-action ${action.accent ?? ''}`}
+                      onClick={action.action}
+                      type="button"
+                    >
+                      <span>{action.label}</span>
+                      <small>{action.description}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="card progress-card">
+                <p className="section-title">Progress Track</p>
+                <ul>
+                  {progress.map(item => (
+                    <li key={item.label}>
+                      <div className="progress-label">
+                        <span>{item.label}</span>
+                        <span>{item.value}%</span>
+                      </div>
+                      <div className="progress-bar">
+                        <span
+                          className="progress-fill"
+                          style={{ width: `${item.value}%`, background: item.color }}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="card chat-card" ref={chatSectionRef}>
+                <div className="resume-card-header" style={{ borderBottom: 'none', padding: 0, marginBottom: 16 }}>
+                  <div>
+                    <p className="section-title">AI Career Coach</p>
+                    <h3>GitHired Assistant</h3>
+                  </div>
+                </div>
+                <AgentChat userId={user.id} />
+              </div>
+            </section>
+          </div>
+        </>
+      ) : activeTab === 'jobs' ? (
+        <Jobs />
+      ) : activeTab === 'assessment' ? (
+        <Assessment />
+      ) : (
+        <section className="resources-shell">
+          <div className="card resources-hero">
+            <div>
+              <p className="section-title">Resources Hub</p>
+              <h2 style={{ marginBottom: 8 }}>Targeted materials for sharper outcomes</h2>
+              <p style={{ color: '#9db7ff', maxWidth: 560 }}>
+                Every resource here maps to the seven assessment job fields. Filter by your industry to prioritize
+                the certifications, courses, and templates that sharpen your next move.
+              </p>
+            </div>
+            <div className="resources-hero-metrics">
+              <div>
+                <div className="resources-metric-label">Active filter</div>
+                <div className="resources-metric-value">{selectedIndustryLabel}</div>
+              </div>
+              <div>
+                <div className="resources-metric-label">Resources available</div>
+                <div className="resources-metric-value">{totalResources}</div>
+              </div>
+              <button className="ghost-button" onClick={() => setSelectedIndustry('all')} type="button">
+                Reset filter
+              </button>
+            </div>
+          </div>
+
+          <div className="resources-layout">
+            <aside className="resources-sidebar card">
+              <p className="section-title">Industry focus</p>
+              <div className="filter-chips">
+                <button
+                  type="button"
+                  className={`filter-chip ${selectedIndustry === 'all' ? 'active' : ''}`}
+                  onClick={() => setSelectedIndustry('all')}
+                  aria-pressed={selectedIndustry === 'all'}
+                >
+                  All industries
+                </button>
+                {industryOptions.map(option => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`filter-chip ${selectedIndustry === option.id ? 'active' : ''}`}
+                    onClick={() => setSelectedIndustry(option.id)}
+                    aria-pressed={selectedIndustry === option.id}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="industry-insight">
+                <div className="industry-signal">
+                  {selectedIndustry === 'all'
+                    ? 'Pick a field to unlock tailored resources.'
+                    : industryOptions.find(option => option.id === selectedIndustry)?.signal}
+                </div>
+                <p>
+                  {selectedIndustry === 'all'
+                    ? 'We curate materials across software, data, design, ops, security, customer, and vertical tech.'
+                    : industryOptions.find(option => option.id === selectedIndustry)?.focus}
+                </p>
+              </div>
+            </aside>
+
+            <div className="resources-content">
+              {filteredCategories.map(category => (
+                <div className="card resources-category" key={category.id}>
+                  <div className="resources-category-header">
+                    <div>
+                      <p className="section-title">{category.title}</p>
+                      <h3 style={{ margin: 0 }}>{category.description}</h3>
+                    </div>
+                    <span className="pill subtle">{category.items.length} items</span>
+                  </div>
+                  {category.items.length === 0 ? (
+                    <div className="resources-empty">
+                      No resources match this filter yet. Try another field or reset to see everything.
+                    </div>
+                  ) : (
+                    <div className="resource-grid">
+                      {category.items.map(item => (
+                        <a
+                          className="resource-card"
+                          key={`${category.id}-${item.title}`}
+                          href={item.link}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <div className="resource-card-header">
+                            <span className="pill">{item.level}</span>
+                            <span className="resource-format">{item.format}</span>
+                          </div>
+                          <h4>{item.title}</h4>
+                          <p className="resource-provider">{item.provider}</p>
+                          <div className="resource-meta">
+                            <span>{item.duration}</span>
+                            <span>·</span>
+                            <span>{item.tags.join(' · ')}</span>
+                          </div>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
     </div>
-  )
+  );
 }

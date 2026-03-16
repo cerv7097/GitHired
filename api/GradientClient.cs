@@ -12,14 +12,22 @@ private readonly HttpClient _http = new();
 
 
   public GradientClient(IConfiguration cfg) {
-    _key = cfg["GRADIENT_API_KEY"] ?? throw new Exception("GRADIENT_API_KEY not set");
+    _key = cfg["GRADIENT_API_KEY"] ?? "";
+    if (!string.IsNullOrEmpty(_key))
+    {
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _key);
-        // Increase timeout to 5 minutes for long resume processing
-        _http.Timeout = TimeSpan.FromMinutes(5);
+    }
+    // Increase timeout to 5 minutes for long resume processing
+    _http.Timeout = TimeSpan.FromMinutes(5);
   }
 
    public async Task<string> ChatAsync(string system, string user, string model = "llama3-8b-instruct", int? maxTokens = null)
     {
+        if (string.IsNullOrEmpty(_key))
+        {
+            throw new InvalidOperationException("GRADIENT_API_KEY is not configured. Please set the GRADIENT_API_KEY environment variable.");
+        }
+
         var payload = new
         {
             model,
@@ -49,9 +57,14 @@ private readonly HttpClient _http = new();
     public async Task<ChatCompletionResponse> ChatWithToolsAsync(
         List<ConversationMessage> messages,
         List<ToolDefinition>? tools = null,
-        string model = "llama3-8b-instruct",
+        string model = "openai-gpt-4o-mini",
         double temperature = 0.3)
     {
+        if (string.IsNullOrEmpty(_key))
+        {
+            throw new InvalidOperationException("GRADIENT_API_KEY is not configured. Please set the GRADIENT_API_KEY environment variable.");
+        }
+
         var payload = new
         {
             model,

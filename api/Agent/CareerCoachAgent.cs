@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CareerCoach.Agent.Tools;
+using CareerCoach.Services;
 
 namespace CareerCoach.Agent;
 
@@ -13,20 +14,20 @@ public class CareerCoachAgent
     private readonly Dictionary<string, List<ConversationMessage>> _conversations = new();
     private const int MaxIterations = 5; // Prevent infinite loops
 
-    public CareerCoachAgent(GradientClient llm, Db db)
+    public CareerCoachAgent(GradientClient llm, Db db, JobAggregatorService aggregator)
     {
         _llm = llm;
         _toolRegistry = new ToolRegistry();
 
         // Register all available tools
-        RegisterTools(db);
+        RegisterTools(db, aggregator);
     }
 
-    private void RegisterTools(Db db)
+    private void RegisterTools(Db db, JobAggregatorService aggregator)
     {
         _toolRegistry.RegisterTool(new AnalyzeATSTool(_llm));
         _toolRegistry.RegisterTool(new ImproveResumeTool(_llm));
-        _toolRegistry.RegisterTool(new SearchJobsTool());
+        _toolRegistry.RegisterTool(new SearchJobsTool(aggregator));
         _toolRegistry.RegisterTool(new GetCareerPathTool(_llm));
         _toolRegistry.RegisterTool(new GenerateAssessmentTool(_llm));
         _toolRegistry.RegisterTool(new GetUserProfileTool(db));
@@ -36,6 +37,24 @@ public class CareerCoachAgent
     /// Process a user message and return the agent's response
     /// </summary>
     public async Task<AgentResponse> ProcessMessageAsync(string conversationId, string userId, string userMessage)
+    {
+        try
+        {
+            return await ProcessMessageInternalAsync(conversationId, userId, userMessage);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Agent processing failed: {ex.Message}");
+            return new AgentResponse
+            {
+                Message = $"I hit an internal error while processing your request. Please try again in a moment. Details: {ex.Message}",
+                ToolsUsed = new List<ToolExecution>(),
+                ConversationId = conversationId
+            };
+        }
+    }
+
+    private async Task<AgentResponse> ProcessMessageInternalAsync(string conversationId, string userId, string userMessage)
     {
         // Initialize or retrieve conversation history
         if (!_conversations.ContainsKey(conversationId))
@@ -67,12 +86,27 @@ public class CareerCoachAgent
         {
             iterations++;
 
-            // Call LLM with available tools
-            var response = await _llm.ChatWithToolsAsync(
-                messages,
-                _toolRegistry.GetToolDefinitions(),
-                temperature: 0.7
-            );
+            ChatCompletionResponse response;
+            try
+            {
+                // Call LLM with available tools
+                response = await _llm.ChatWithToolsAsync(
+                    messages,
+                    _toolRegistry.GetToolDefinitions(),
+                    temperature: 0.7
+                );
+            }
+            catch (HttpRequestException ex)
+            {
+                // Network/auth failures from the LLM should not crash the API
+                Console.WriteLine($"[ERROR] LLM request failed: {ex.Message}");
+                return BuildLLMErrorResponse(conversationId, toolExecutions, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Unexpected agent failure: {ex.Message}");
+                return BuildLLMErrorResponse(conversationId, toolExecutions, ex.Message);
+            }
 
             var assistantMessage = response.Choices.FirstOrDefault()?.Message;
             if (assistantMessage == null)
@@ -141,6 +175,17 @@ public class CareerCoachAgent
         return new AgentResponse
         {
             Message = "I've processed your request but need to pause here. How else can I help you?",
+            ToolsUsed = toolExecutions,
+            ConversationId = conversationId
+        };
+    }
+
+    private AgentResponse BuildLLMErrorResponse(string conversationId, List<ToolExecution> toolExecutions, string errorMessage)
+    {
+        var hint = "Please verify GRADIENT_API_KEY is set on the API server and that it can reach the internet.";
+        return new AgentResponse
+        {
+            Message = $"I ran into a problem reaching the AI model. {hint} Details: {errorMessage}",
             ToolsUsed = toolExecutions,
             ConversationId = conversationId
         };

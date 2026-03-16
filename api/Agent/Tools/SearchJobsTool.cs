@@ -1,17 +1,26 @@
 using System.Text.Json;
+using CareerCoach.Services;
 
 namespace CareerCoach.Agent.Tools;
 
 /// <summary>
-/// Tool for searching and recommending jobs based on user profile
+/// Tool for searching jobs across multiple APIs (JSearch, Adzuna, The Muse, Remotive)
+/// and returning deduplicated results.
 /// </summary>
 public class SearchJobsTool : AgentTool
 {
+    private readonly JobAggregatorService _aggregator;
+
+    public SearchJobsTool(JobAggregatorService aggregator)
+    {
+        _aggregator = aggregator;
+    }
+
     public override string Name => "search_jobs";
 
     public override string Description =>
-        "Searches for job recommendations based on skills, experience level, location, and industry. " +
-        "Returns a list of matching job titles and descriptions.";
+        "Searches for real job listings based on skills, experience level, location, and industry. " +
+        "Returns live job results with titles, companies, locations, and apply links.";
 
     public override object ParameterSchema => new
     {
@@ -33,7 +42,7 @@ public class SearchJobsTool : AgentTool
             industry = new
             {
                 type = "string",
-                description = "Target industry (e.g., 'software', 'healthcare', 'finance')"
+                description = "Target industry or role type (e.g., 'software engineer', 'data analyst')"
             },
             location = new
             {
@@ -44,7 +53,7 @@ public class SearchJobsTool : AgentTool
         required = new[] { "skills", "experience_level" }
     };
 
-    public override Task<string> ExecuteAsync(string parameters)
+    public override async Task<string> ExecuteAsync(string parameters)
     {
         var parsed = JsonDocument.Parse(parameters);
         var root = parsed.RootElement;
@@ -52,116 +61,67 @@ public class SearchJobsTool : AgentTool
         var skills = new List<string>();
         if (root.TryGetProperty("skills", out var skillsProp))
         {
-            // Handle both string and array formats
             if (skillsProp.ValueKind == JsonValueKind.Array)
-            {
                 foreach (var skill in skillsProp.EnumerateArray())
-                {
                     skills.Add(skill.GetString() ?? "");
-                }
-            }
             else if (skillsProp.ValueKind == JsonValueKind.String)
-            {
-                // If it's a string, split by common delimiters
-                var skillsStr = skillsProp.GetString() ?? "";
-                skills = skillsStr.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries)
+                skills = (skillsProp.GetString() ?? "")
+                    .Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(s => s.Trim())
                     .Where(s => !string.IsNullOrEmpty(s))
                     .ToList();
-            }
         }
 
         var experienceLevel = root.TryGetProperty("experience_level", out var expProp)
-            ? expProp.GetString() ?? "mid"
-            : "mid";
+            ? expProp.GetString() ?? "mid" : "mid";
 
         var industry = root.TryGetProperty("industry", out var indProp)
-            ? indProp.GetString() ?? "technology"
-            : "technology";
+            ? indProp.GetString() ?? "software engineer" : "software engineer";
 
         var location = root.TryGetProperty("location", out var locProp)
-            ? locProp.GetString() ?? "remote"
-            : "remote";
+            ? locProp.GetString() ?? "" : "";
 
-        // Mock job recommendations (in production, this would call a real job API)
-        var jobs = GenerateMockJobs(skills, experienceLevel, industry, location);
-
-        return Task.FromResult(JsonSerializer.Serialize(new
+        var levelLabel = experienceLevel switch
         {
-            total_results = jobs.Count,
-            jobs = jobs
-        }));
-    }
-
-    private List<object> GenerateMockJobs(List<string> skills, string experienceLevel, string industry, string location)
-    {
-        // This is a simplified mock. In production, integrate with:
-        // - LinkedIn Jobs API
-        // - Indeed API
-        // - GitHub Jobs
-        // - Your own job database
-
-        var jobs = new List<object>
-        {
-            new
-            {
-                title = $"{GetLevelPrefix(experienceLevel)} Software Engineer",
-                company = "Tech Innovators Inc.",
-                location = location,
-                skills_match = skills.Take(3).ToList(),
-                match_score = 92,
-                salary_range = GetSalaryRange(experienceLevel),
-                description = $"Looking for a {experienceLevel} developer with expertise in {string.Join(", ", skills.Take(2))}.",
-                url = "https://example.com/job/1"
-            },
-            new
-            {
-                title = $"{GetLevelPrefix(experienceLevel)} Full Stack Developer",
-                company = "Digital Solutions Corp",
-                location = location,
-                skills_match = skills.Take(4).ToList(),
-                match_score = 88,
-                salary_range = GetSalaryRange(experienceLevel),
-                description = $"We need a talented {experienceLevel} developer proficient in {string.Join(", ", skills.Take(3))}.",
-                url = "https://example.com/job/2"
-            },
-            new
-            {
-                title = $"{industry.ToUpper()} {GetLevelPrefix(experienceLevel)} Developer",
-                company = "Industry Leaders LLC",
-                location = location,
-                skills_match = skills.Take(2).ToList(),
-                match_score = 85,
-                salary_range = GetSalaryRange(experienceLevel),
-                description = $"Join our {industry} team as a {experienceLevel} developer.",
-                url = "https://example.com/job/3"
-            }
+            "entry" => "junior",
+            "senior" => "senior",
+            "lead" => "lead",
+            _ => ""
         };
 
-        return jobs;
-    }
+        var queryParts = new List<string>();
+        if (!string.IsNullOrEmpty(levelLabel)) queryParts.Add(levelLabel);
+        queryParts.Add(industry);
+        if (skills.Count > 0) queryParts.Add(string.Join(" ", skills.Take(2)));
+        var query = string.Join(" ", queryParts);
 
-    private string GetLevelPrefix(string level)
-    {
-        return level switch
-        {
-            "entry" => "Junior",
-            "mid" => "Mid-Level",
-            "senior" => "Senior",
-            "lead" => "Lead",
-            _ => "Mid-Level"
-        };
-    }
+        var isRemote = location.Equals("remote", StringComparison.OrdinalIgnoreCase);
+        if (!isRemote && !string.IsNullOrEmpty(location))
+            query += $" in {location}";
 
-    private string GetSalaryRange(string level)
-    {
-        return level switch
+        var result = await _aggregator.SearchAllAsync(
+            query,
+            location: isRemote ? null : location,
+            remoteOnly: isRemote,
+            experienceLevel: experienceLevel);
+
+        return JsonSerializer.Serialize(new
         {
-            "entry" => "$60k - $80k",
-            "mid" => "$80k - $120k",
-            "senior" => "$120k - $160k",
-            "lead" => "$150k - $200k+",
-            _ => "$80k - $120k"
-        };
+            total_results = result.TotalResults,
+            jobs = result.Jobs.Select(j => new
+            {
+                title = j.Title,
+                company = j.Company,
+                location = j.Location,
+                is_remote = j.IsRemote,
+                employment_type = j.EmploymentType,
+                salary = j.MinSalary != null && j.MaxSalary != null
+                    ? $"{j.SalaryCurrency} {j.MinSalary}–{j.MaxSalary}/{j.SalaryPeriod}"
+                    : "Not specified",
+                description_snippet = j.DescriptionSnippet,
+                apply_link = j.ApplyLink,
+                posted_at = j.PostedAt
+            })
+        });
     }
 }
