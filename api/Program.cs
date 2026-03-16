@@ -52,12 +52,6 @@ app.MapGet("/api/health", ([FromServices] GradientClient llm, [FromServices] Res
     }
 });
 
-app.MapPost("/api/mock-interview", async ([FromServices] GradientClient llm, [FromBody] Prompt req) => {
-  var sys = "You are a technical interviewer. Ask one question at a time.";
-  var raw = await llm.ChatAsync(sys, req.prompt);
-  return Results.Text(raw, "application/json");
-});
-
 app.MapPost("/api/resume/analyze", async (
     [FromServices] GradientClient llm,
     [FromServices] Db db,
@@ -409,7 +403,6 @@ app.MapGet("/api/auth/me", async (
 
 app.Run();
 
-record Prompt(string prompt);
 record Analyze(string userId, string resumeText);
 record AgentChatRequest(string UserId, string Message, string? ConversationId);
 record RegisterRequest(string Email, string Password, string FirstName, string LastName);

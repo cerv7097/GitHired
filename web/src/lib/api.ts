@@ -1,14 +1,3 @@
-export async function mockInterview(prompt: string) {
-  const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/mock-interview`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt })
-  });
-  // don’t assume success—surface server errors for debugging
-  const text = await res.text();
-  try { return JSON.parse(text); } catch { return text; }
-}
-
 export async function analyzeResume(userId: string, resumeText: string) {
   const res = await fetch(`${import.meta.env.VITE_API_BASE}/api/resume/analyze`, {
     method: 'POST',

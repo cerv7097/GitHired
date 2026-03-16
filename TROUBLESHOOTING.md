@@ -1,203 +1,123 @@
-# 🔧 Troubleshooting Guide
+# Troubleshooting
 
-## "Failed to Fetch" Error When Uploading Resume
+## API Does Not Start
 
-### Problem
-When trying to upload a resume, you get an error: "Failed to fetch" or "Cannot connect to API"
+Check:
 
-### Root Cause
-The frontend was configured to connect to `http://localhost:5000`, but:
-1. **macOS uses port 5000 for AirPlay/AirTunes by default**
-2. Your API is actually running on port **5298** (as configured in `launchSettings.json`)
+- `.NET 9` is installed
+- required environment variables are set
+- PostgreSQL is reachable if you are using auth flows
 
-### Solution ✅ (Already Fixed)
+Run:
 
-The code has been updated to:
-1. **Frontend automatically tries multiple ports** (5298, 5000, 5001)
-2. **AgentChat uses correct port** (5298)
-3. **Better error messages** showing which ports were tried
-
-### Verify It's Working
-
-**1. Check API is running:**
-```bash
-curl http://localhost:5298/
-# Should return: API up
-```
-
-**2. Check upload endpoint:**
-```bash
-curl http://localhost:5298/api/resume/upload
-# Should return 405 Method Not Allowed (since it expects POST)
-```
-
-**3. Test the frontend:**
-- Open browser to http://localhost:5173
-- Open browser console (F12)
-- Try uploading a resume
-- You should see: "Attempting to upload to http://localhost:5298..."
-- Then: "Connected successfully on port 5298"
-
-### Common Issues & Fixes
-
-#### Issue 1: API Not Running
-**Symptom:** "Cannot connect to API" after trying all ports
-
-**Fix:**
 ```bash
 cd api
 dotnet run
-# Look for: "Now listening on: http://localhost:5298"
 ```
 
-#### Issue 2: Port 5000 Conflict (macOS)
-**Symptom:** Port 5000 returns 403 Forbidden or connects to wrong service
+Expected local API URL:
 
-**Why:** macOS Monterey+ uses port 5000 for AirPlay Receiver
+`http://localhost:5001`
 
-**Fix:** Use port 5298 instead (already configured)
+## Frontend Cannot Reach The API
 
-**Alternative - Disable AirPlay on port 5000:**
-```
-System Settings → General → AirDrop & Handoff →
-Uncheck "AirPlay Receiver"
-```
+Most frontend components expect the API on `http://localhost:5001`.
 
-#### Issue 3: CORS Error
-**Symptom:** Browser console shows CORS policy error
+Check:
 
-**Fix:** CORS is already configured in `Program.cs`:
-```csharp
-b.Services.AddCors(o => o.AddDefaultPolicy(p =>
-  p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
-```
+- the API is actually running on `5001`
+- another process is not occupying that port
+- the frontend was started with `npm run dev`
 
-If still seeing CORS errors, verify API is running and restart it.
+Useful commands:
 
-#### Issue 4: File Format Error
-**Symptom:** "Only PDF and DOCX files are supported"
-
-**Fix:** Make sure you're uploading `.pdf` or `.docx` files, not:
-- `.doc` (old Word format - not supported)
-- `.txt`, `.rtf`, or other text formats
-
-#### Issue 5: File Too Large
-**Symptom:** "File size exceeds 5MB limit"
-
-**Fix:**
-- Compress your PDF
-- Remove images from resume
-- Or increase limit in `Program.cs` (line 187):
-```csharp
-const long maxFileSize = 10 * 1024 * 1024; // Increase to 10MB
-```
-
-#### Issue 6: Frontend Not Running
-**Symptom:** Can't access http://localhost:5173
-
-**Fix:**
 ```bash
-cd web
-npm install  # If first time
-npm run dev
-# Should show: Local: http://localhost:5173/
+lsof -i :5001
+curl http://localhost:5001/api/health
 ```
 
-### Debugging Tips
+## Resume Upload Fails With "Cannot connect to API"
 
-**1. Open Browser DevTools (F12)**
-- Console tab shows fetch errors
-- Network tab shows actual requests
-- Look for the request to `/api/resume/upload`
-- Check status code and response
+`ResumeUpload.tsx` tries these ports:
 
-**2. Check API Logs**
-The terminal running `dotnet run` shows:
-- Incoming requests
-- Errors/exceptions
-- CORS preflight requests
+- `5001`
+- `5298`
+- `5000`
 
-**3. Test with curl**
-```bash
-# Create a test PDF (macOS)
-echo "Test Resume" | textutil -stdin -format txt -convert pdf -output /tmp/test.pdf
+If upload fails:
 
-# Upload it
-curl -X POST http://localhost:5298/api/resume/upload \
-  -F "file=@/tmp/test.pdf" \
-  -F "userId=test-user" \
-  -F "targetRole=Developer"
-```
+1. confirm the API is running
+2. confirm one of those ports is listening
+3. prefer aligning the backend to `5001`, since that is the main app default
 
-### Port Configuration
+## Resume Upload Rejects The File
 
-**API Ports (configured in `api/Properties/launchSettings.json`):**
-- HTTP: `5298`
-- HTTPS: `7114` (if using https profile)
+Expected causes:
 
-**Frontend Port:**
-- Vite dev server: `5173`
+- wrong file type
+- file larger than 5 MB
+- invalid or unreadable PDF/DOCX
 
-**To change API port:**
-1. Edit `api/Properties/launchSettings.json`
-2. Change `applicationUrl` values
-3. Update frontend URLs if needed
-4. Restart API
+Supported formats:
 
-### Still Having Issues?
+- `.pdf`
+- `.docx`
 
-**Check this checklist:**
-- [ ] API is running (`dotnet run` in api folder)
-- [ ] Frontend is running (`npm run dev` in web folder)
-- [ ] Browser is pointing to http://localhost:5173
-- [ ] No errors in API terminal
-- [ ] No errors in browser console (F12)
-- [ ] Using correct file format (PDF or DOCX)
-- [ ] File is under 5MB
-- [ ] Port 5298 is not blocked by firewall
+Not supported:
 
-**Get more info:**
-```bash
-# Check if API port is listening
-netstat -an | grep 5298
+- `.doc`
+- `.txt`
+- `.rtf`
 
-# Check if anything is blocking the port
-lsof -i :5298
+## Agent Chat Returns A Model Error
 
-# See full API output
-cd api
-dotnet run --verbosity detailed
-```
+The agent depends on the model client being able to reach the external AI service.
 
-### Quick Reference - Working Configuration
+Check:
 
-**API** (`api/Program.cs`):
-```csharp
-// Line 12: CORS enabled for all origins
-b.Services.AddCors(o => o.AddDefaultPolicy(p =>
-  p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
+- `GRADIENT_API_KEY` is set for the API process
+- the machine has network access
+- the API logs show whether the failure is auth-related or network-related
 
-// Line 173: Upload endpoint
-app.MapPost("/api/resume/upload", async (...) => { ... })
-  .DisableAntiforgery();
-```
+## Login Or Registration Fails
 
-**Frontend** (`web/src/ResumeUpload.tsx`):
-```typescript
-// Lines 88-107: Auto-detects port
-const ports = [5298, 5000, 5001];
-// Tries each port until one works
-```
+Check:
 
-**Ports:**
-- API: http://localhost:5298
-- Frontend: http://localhost:5173
+- PostgreSQL connection settings are valid
+- the database is reachable
+- the app can create and read auth records
 
----
+Relevant variables:
 
-**The resume upload feature should now work perfectly!** 🎉
+- `PGHOST`
+- `PGPORT`
+- `PGDATABASE`
+- `PGUSER`
+- `PGPASSWORD`
 
-If you're still experiencing issues after trying these steps, please check:
-1. API terminal for error messages
-2. Browser console for detailed error info
-3. Network tab in DevTools for actual request/response
+## Important Development Caveat
+
+`Db.EnsureAuthTablesAsync()` currently drops and recreates auth tables on startup. If accounts appear to disappear after restarting the API, that is the reason.
+
+This behavior should be treated as a development-only shortcut, not production behavior.
+
+## Job Search Returns No Results
+
+Check:
+
+- `JSEARCH_API_KEY` is set
+- `ADZUNA_APP_ID` and `ADZUNA_APP_KEY` are set
+- external job providers are reachable
+
+The aggregator tolerates single-source failures, so partial results are possible even when one provider is down.
+
+## Port 5000 Conflicts On macOS
+
+If you see unexpected behavior on `5000`, prefer `5001`.
+
+Alternative:
+
+1. Open System Settings
+2. Go to `General`
+3. Open `AirDrop & Handoff`
+4. Disable `AirPlay Receiver`

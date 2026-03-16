@@ -657,9 +657,9 @@ export default function App({ user, onLogout }: AppProps) {
       ]
     },
     {
-      id: 'interview-prep',
-      title: 'Interview Prep',
-      description: 'Practice drills and question banks by role.',
+      id: 'career-readiness',
+      title: 'Career Readiness',
+      description: 'Role-specific study guides and preparation materials.',
       items: [
         {
           title: 'System Design Primer',
@@ -672,8 +672,8 @@ export default function App({ user, onLogout }: AppProps) {
           tags: ['Architecture', 'Scalability', 'Design']
         },
         {
-          title: 'Data Science Interview Guide',
-          provider: 'Interview Query',
+          title: 'Data Science Practice Guide',
+          provider: 'Query Practice',
           format: 'Guide',
           level: 'Intermediate',
           duration: '4 weeks',
@@ -682,7 +682,7 @@ export default function App({ user, onLogout }: AppProps) {
           tags: ['SQL', 'Stats', 'ML']
         },
         {
-          title: 'Security Interview Questions',
+          title: 'Security Readiness Checklist',
           provider: 'OWASP',
           format: 'Checklist',
           level: 'Intermediate',
@@ -692,7 +692,7 @@ export default function App({ user, onLogout }: AppProps) {
           tags: ['Threats', 'AppSec', 'Controls']
         },
         {
-          title: 'Product Design Interview Prep',
+          title: 'Product Design Case Study Guide',
           provider: 'Designlab',
           format: 'Guide',
           level: 'Intermediate',
@@ -768,7 +768,7 @@ export default function App({ user, onLogout }: AppProps) {
 
   const quickActions = [
     { label: 'Upload Resume', description: 'Refresh your ATS scan', accent: 'primary', action: () => scrollToSection(resumeSectionRef) },
-    { label: 'Talk to Coach', description: 'Mock interview & insights', action: () => scrollToSection(chatSectionRef) },
+    { label: 'Talk to Coach', description: 'Guidance and insights', action: () => scrollToSection(chatSectionRef) },
     { label: 'Skills Courses', description: 'Close your gaps faster' }
   ];
 
@@ -788,7 +788,7 @@ export default function App({ user, onLogout }: AppProps) {
   const progress = [
     { label: 'Profile', value: 80, color: 'linear-gradient(90deg,#3ac1ff,#22d3ee)' },
     { label: 'Skills', value: 65, color: 'linear-gradient(90deg,#34d399,#4ade80)' },
-    { label: 'Interview', value: 45, color: 'linear-gradient(90deg,#fb7185,#f97316)' }
+    { label: 'Coaching', value: 45, color: 'linear-gradient(90deg,#fb7185,#f97316)' }
   ];
 
   const matches = [

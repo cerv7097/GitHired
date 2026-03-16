@@ -1,291 +1,174 @@
-# 🚀 AI Career Coach - Intelligent Job & Career Readiness Platform
+# GitHired by NextWave Insights
 
-An AI-powered career development platform featuring a **true AI agent** that autonomously helps users with job searching, resume optimization, career planning, and skills assessment.
+GitHired is a career-readiness platform with a React frontend and an ASP.NET Core API. The current product centers on authenticated access, AI-guided career coaching, resume upload and ATS analysis, live job search aggregation, self-assessments, and curated learning resources.
 
-## ✨ Key Features
+## Current Features
 
-### 🤖 AI Agent Capabilities
-- **Autonomous Tool Selection** - Agent decides which tools to use based on user needs
-- **Multi-turn Conversations** - Maintains context across conversation history
-- **Complex Workflow Execution** - Chains multiple tools to accomplish sophisticated tasks
-- **Personalized Recommendations** - Tailors advice based on user profile and goals
+- Account registration, login, and token-based session validation
+- AI career coach chat backed by a tool-calling agent
+- Resume upload for PDF and DOCX files
+- Resume parsing, ATS scoring, and AI-generated improvement guidance
+- Live job aggregation across multiple providers
+- Guided skills assessments across several career tracks
+- Dashboard and resource library in the authenticated web app
 
-### 🎯 Core Functions
-1. **Resume Analysis & ATS Checking**
-   - Parse and analyze resumes
-   - Check ATS (Applicant Tracking System) compatibility
-   - Provide specific improvement recommendations
-   - Score resume quality (0-100)
+## Tech Stack
 
-2. **Job Recommendations**
-   - Search jobs based on skills, experience, location
-   - Match user profile to opportunities
-   - Show match scores and relevance
-   - Filter by industry and role
+- Backend: ASP.NET Core 9, C#
+- Frontend: React, TypeScript, Vite
+- Database: PostgreSQL via `Npgsql`
+- AI: Gradient-backed chat and tool calling
 
-3. **Career Path Planning**
-   - Generate personalized career roadmaps
-   - Identify skill gaps
-   - Recommend courses and certifications
-   - Create timeline with milestones
-   - Suggest portfolio projects
+## Project Structure
 
-4. **Skills Assessment**
-   - Generate custom assessments for any role/industry
-   - Multiple question types (multiple choice, short answer, coding)
-   - Adjustable difficulty levels
-   - Automated scoring (planned)
-
-5. **Mock Interview Practice**
-   - AI-powered interview coaching
-   - Industry-specific questions
-   - Real-time feedback (planned)
-   - Multi-turn conversation practice
-
-## 🏗️ Architecture
-
-```
+```text
 career-coach/
-├── api/                          # C# ASP.NET Core Backend
-│   ├── Agent/                    # AI Agent Framework
-│   │   ├── AgentTool.cs          # Base class for tools
-│   │   ├── ToolRegistry.cs       # Tool management
-│   │   ├── ConversationMessage.cs # Conversation state
-│   │   ├── CareerCoachAgent.cs   # Main agent orchestrator
-│   │   └── Tools/                # Individual tools
-│   │       ├── AnalyzeATSTool.cs
-│   │       ├── SearchJobsTool.cs
-│   │       ├── GetCareerPathTool.cs
-│   │       ├── GenerateAssessmentTool.cs
-│   │       └── GetUserProfileTool.cs
-│   ├── GradientClient.cs         # LLM client with function calling
-│   ├── Db.cs                     # Database layer
-│   └── Program.cs                # API endpoints
-│
-├── web/                          # React + TypeScript Frontend
-│   └── src/
-│       ├── AgentChat.tsx         # AI Agent chat interface
-│       ├── Resume.tsx            # Resume analyzer
-│       └── Interview.tsx         # Mock interview
-│
-└── AI_AGENT_GUIDE.md            # Complete agent documentation
+├── api/
+│   ├── Agent/
+│   │   ├── CareerCoachAgent.cs
+│   │   ├── ToolRegistry.cs
+│   │   └── Tools/
+│   ├── Services/
+│   ├── Program.cs
+│   └── Properties/launchSettings.json
+├── web/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── AgentChat.tsx
+│   │   ├── ResumeUpload.tsx
+│   │   ├── Jobs.tsx
+│   │   ├── Assessment.tsx
+│   │   └── Login.tsx
+│   └── README.md
+├── AI_AGENT_GUIDE.md
+├── PORT_CONFIGURATION.md
+├── RESUME_FEATURE_SUMMARY.md
+├── RESUME_UPLOAD_GUIDE.md
+├── TRANSFORMATION_SUMMARY.md
+└── TROUBLESHOOTING.md
 ```
 
-## 🚀 Quick Start
+## Prerequisites
 
-### Prerequisites
-- .NET 9.0 SDK
+- .NET 9 SDK
 - Node.js 18+
-- PostgreSQL (for production)
-- DigitalOcean Gradient API key
+- PostgreSQL
+- `GRADIENT_API_KEY`
 
-### Backend Setup
+For job search, configure the provider keys used by the API. The repository currently expects:
 
-1. **Configure environment variables:**
+- `JSEARCH_API_KEY`
+- `ADZUNA_APP_ID`
+- `ADZUNA_APP_KEY`
+- `THE_MUSE_API_KEY` optional
+
+For database-backed auth:
+
+- `PGHOST`
+- `PGPORT`
+- `PGDATABASE`
+- `PGUSER`
+- `PGPASSWORD`
+- `PGSSLmode` optional, defaults to `require`
+
+## Local Development
+
+### Backend
+
 ```bash
 cd api
-# Create .env or use user secrets
-dotnet user-secrets set "GRADIENT_API_KEY" "your-api-key"
-dotnet user-secrets set "PGHOST" "your-db-host"
+dotnet user-secrets set "GRADIENT_API_KEY" "your-key"
+dotnet user-secrets set "PGHOST" "your-host"
 dotnet user-secrets set "PGPORT" "5432"
 dotnet user-secrets set "PGDATABASE" "career_coach"
 dotnet user-secrets set "PGUSER" "your-user"
 dotnet user-secrets set "PGPASSWORD" "your-password"
-```
-
-2. **Run the API:**
-```bash
 dotnet run
-# API will be available at http://localhost:5000
 ```
 
-### Frontend Setup
+Default local API URL:
 
-1. **Install dependencies:**
+- `http://localhost:5001`
+
+### Frontend
+
 ```bash
 cd web
 npm install
-```
-
-2. **Run the development server:**
-```bash
 npm run dev
-# Frontend will be available at http://localhost:5173
 ```
 
-## 📡 API Endpoints
+Default local frontend URL:
 
-### Agent Endpoints
+- `http://localhost:5173`
 
-#### POST `/api/agent/chat`
-Main endpoint for conversing with the AI agent.
+## API Endpoints
 
-**Request:**
-```json
-{
-  "userId": "user-123",
-  "message": "Find me senior developer jobs in fintech",
-  "conversationId": "optional-conv-id"
-}
-```
+### Core
 
-**Response:**
-```json
-{
-  "message": "I found 3 senior developer positions in fintech...",
-  "toolsUsed": [
-    {
-      "toolName": "get_user_profile",
-      "arguments": "...",
-      "result": "..."
-    },
-    {
-      "toolName": "search_jobs",
-      "arguments": "...",
-      "result": "..."
-    }
-  ],
-  "conversationId": "conv-abc-123"
-}
-```
+- `GET /` health text response
+- `GET /api/health` service readiness summary
 
-#### GET `/api/agent/conversation/{conversationId}`
-Retrieve conversation history.
+### Auth
 
-#### DELETE `/api/agent/conversation/{conversationId}`
-Clear conversation history.
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
 
-### Legacy Endpoints
+### Agent
 
-#### POST `/api/resume/analyze`
-Direct resume analysis (legacy, prefer using agent).
+- `POST /api/agent/chat`
+- `GET /api/agent/conversation/{conversationId}`
+- `DELETE /api/agent/conversation/{conversationId}`
 
-#### POST `/api/mock-interview`
-Direct interview question generation (legacy, prefer using agent).
+### Resume
 
-## 🛠️ Available AI Tools
+- `POST /api/resume/upload`
+- `POST /api/resume/analyze`
 
-The agent can autonomously use these tools:
+### Jobs
 
-| Tool | Purpose | Parameters |
-|------|---------|------------|
-| `analyze_ats_compatibility` | Analyze resume ATS compatibility | `resume_text` |
-| `search_jobs` | Find matching job opportunities | `skills`, `experience_level`, `industry`, `location` |
-| `get_career_path` | Generate career development plan | `current_role`, `target_role`, `current_skills`, `industry` |
-| `generate_assessment` | Create skills assessment | `industry`, `role`, `difficulty`, `num_questions` |
-| `get_user_profile` | Retrieve user information | `user_id` |
+- `GET /api/jobs/search`
 
-See [AI_AGENT_GUIDE.md](./AI_AGENT_GUIDE.md) for detailed documentation.
+## AI Agent Tools
 
-## 💬 Example Interactions
+The agent currently registers these tools:
 
-### Resume Analysis
-```
-User: "Can you check if my resume is ATS-friendly?"
-Agent: [Calls analyze_ats_compatibility]
-       "Your resume scores 82/100. Here are the issues I found..."
-```
+- `analyze_ats_compatibility`
+- `improve_resume`
+- `search_jobs`
+- `get_career_path`
+- `generate_assessment`
+- `get_user_profile`
 
-### Job Search
-```
-User: "I want to find remote senior developer jobs"
-Agent: [Calls get_user_profile → search_jobs]
-       "Based on your C#, React, and SQL skills, I found 5 positions..."
-```
+## Current Product Notes
 
-### Career Planning
-```
-User: "How do I become a tech lead?"
-Agent: [Calls get_user_profile → get_career_path]
-       "Here's your 18-month roadmap to tech lead..."
-```
+- The authenticated app is the main user flow.
+- Resume upload creates an agent conversation and combines parser output with tool-driven analysis.
+- Job search uses a fan-out aggregator and deduplicates results across providers.
+- Assessments are frontend-guided experiences with local scoring and next-step recommendations.
+## Important Implementation Notes
 
-## 🔮 Planned Features
+- `api/Properties/launchSettings.json` is configured for port `5001`.
+- The frontend currently hardcodes `http://localhost:5001` for most API calls.
+- `ResumeUpload.tsx` also falls back to `5298` and `5000` if `5001` is unavailable.
+- `Db.EnsureAuthTablesAsync()` currently recreates auth tables on startup. That behavior is suitable for local development only.
 
-### Phase 1 (Current)
-- ✅ AI Agent Framework
-- ✅ Core tools (ATS, job search, career path, assessments)
-- ✅ Conversation memory
-- ✅ React chat interface
+## Docs in This Repo
 
-### Phase 2 (Next)
-- 🔲 User authentication (JWT)
-- 🔲 Database schema for users, resumes, assessments
-- 🔲 File upload for resumes (PDF/DOCX)
-- 🔲 Industry selection system
-- 🔲 Persistent conversation storage
+- [AI_AGENT_GUIDE.md](./AI_AGENT_GUIDE.md): agent architecture and tool flow
+- [RESUME_UPLOAD_GUIDE.md](./RESUME_UPLOAD_GUIDE.md): upload and parsing behavior
+- [RESUME_FEATURE_SUMMARY.md](./RESUME_FEATURE_SUMMARY.md): resume feature scope
+- [PORT_CONFIGURATION.md](./PORT_CONFIGURATION.md): local ports and frontend/backend assumptions
+- [TRANSFORMATION_SUMMARY.md](./TRANSFORMATION_SUMMARY.md): what changed from the earlier app shape
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md): local setup and common failures
 
-### Phase 3 (Future)
-- 🔲 Real job API integration (LinkedIn, Indeed)
-- 🔲 Assessment auto-grading
-- 🔲 Multi-agent specialization
-- 🔲 RAG for industry knowledge
-- 🔲 Voice-enabled mock interviews
-- 🔲 AI resume builder
-- 🔲 Email notifications for job matches
+## Verification
 
-## 🧪 Testing
-
-### Test the Agent
-
-**Using curl:**
 ```bash
-curl -X POST http://localhost:5000/api/agent/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "userId": "test-user",
-    "message": "What jobs would you recommend for someone with React and Node.js skills?"
-  }'
-```
-
-**Using the web interface:**
-1. Navigate to http://localhost:5173
-2. Try example prompts like:
-   - "Find me jobs matching my skills"
-   - "Check my resume for ATS compatibility"
-   - "Create a career path to senior engineer"
-
-### Build & Test
-```bash
-# Backend
 cd api
 dotnet build
-dotnet test  # (when tests are added)
 
-# Frontend
-cd web
+cd ../web
 npm run build
-npm run lint
 ```
-
-## 🤝 Contributing
-
-This is a project to transform a simple LLM app into a full AI agent platform. Key areas for contribution:
-
-1. **Additional Tools** - Add more agent capabilities
-2. **Database Integration** - Connect real user profiles and data
-3. **Job API Integration** - Connect to real job boards
-4. **Frontend Enhancement** - Improve UI/UX
-5. **Testing** - Add comprehensive tests
-
-## 📝 License
-
-MIT License - feel free to use this as a foundation for your own AI agent projects!
-
-## 🙏 Acknowledgments
-
-- Built with [DigitalOcean Gradient](https://www.digitalocean.com/products/ai-ml) (Llama 3)
-- Frontend: React + TypeScript + Vite
-- Backend: ASP.NET Core 9.0 + C#
-- AI Agent inspired by OpenAI function calling patterns
-
----
-
-**What makes this an AI Agent?** Unlike simple chatbots, this system:
-- ✅ Uses tools/functions autonomously
-- ✅ Maintains conversation context
-- ✅ Breaks down complex tasks
-- ✅ Chains multiple operations
-- ✅ Makes decisions based on goals
-
-See [AI_AGENT_GUIDE.md](./AI_AGENT_GUIDE.md) for the complete technical breakdown!

@@ -1,42 +1,50 @@
 # Port Configuration
 
-## Issue: macOS Control Center uses port 5000
+## Current Local Defaults
 
-macOS Control Center (AirPlay Receiver) by default uses port 5000, which conflicts with our API.
+- Frontend: `http://localhost:5173`
+- API HTTP: `http://localhost:5001`
+- API HTTPS: `https://localhost:7114`
 
-## Solution: Use Port 5001
+These values come from the current project configuration, especially `api/Properties/launchSettings.json`.
 
-The API now runs on **port 5001** instead of port 5000.
+## Why Port 5001 Is Used
 
-## How to Start the API
+The API is configured for `5001` to avoid the common macOS conflict on `5000` with AirPlay Receiver and related services.
 
-```bash
-cd /Users/lanettacervantes/career-coach/api
-export GRADIENT_API_KEY="your-api-key-here"
-dotnet run --urls "http://localhost:5001"
-```
-
-Or use the stored user secrets:
+## Backend Startup
 
 ```bash
 cd /Users/lanettacervantes/career-coach/api
-GRADIENT_API_KEY=$(dotnet user-secrets list | grep GRADIENT_API_KEY | cut -d'=' -f2- | xargs) dotnet run --urls "http://localhost:5001"
+dotnet run
 ```
 
-## Frontend Configuration
+The default development profile should bind to `http://localhost:5001`.
 
-- **Web App**: http://localhost:5173
-- **API**: http://localhost:5001
+## Frontend Expectations
 
-Both `AgentChat.tsx` and `ResumeUpload.tsx` have been updated to use port 5001.
+Most frontend API calls are currently hardcoded to `http://localhost:5001`, including:
 
-## Verify API is Running
+- auth
+- agent chat
+- jobs
+
+Resume upload has its own fallback logic and tries these ports in order:
+
+1. `5001`
+2. `5298`
+3. `5000`
+
+That fallback exists in `web/src/ResumeUpload.tsx`.
+
+## Health Check
 
 ```bash
 curl http://localhost:5001/api/health
 ```
 
-Should return:
+Expected shape:
+
 ```json
 {
   "status": "healthy",
@@ -44,13 +52,16 @@ Should return:
     "llm": "initialized",
     "parser": "initialized",
     "apiKeyConfigured": true
-  },
-  "message": "All services ready"
+  }
 }
 ```
 
-## Alternative: Disable AirPlay Receiver
+## If You Need A Different Port
 
-If you want to use port 5000, you can disable AirPlay Receiver in System Settings:
-1. System Settings → General → AirDrop & Handoff
-2. Turn off "AirPlay Receiver"
+1. Update `api/Properties/launchSettings.json`.
+2. Update hardcoded frontend URLs in `web/src/`.
+3. Keep `ResumeUpload.tsx` fallback logic aligned with the rest of the app.
+
+## Recommendation
+
+If more port changes are expected, move the frontend to a single shared API base configuration instead of keeping separate hardcoded values in individual components.
