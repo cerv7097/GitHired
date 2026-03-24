@@ -133,35 +133,11 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
     setResult(null);
 
     try {
-      // Try multiple possible ports (5001 first, then fallback)
-      const ports = [5001, 5298, 5000];
-      let response: Response | null = null;
-      let lastError: Error | null = null;
-
-      for (const port of ports) {
-        try {
-          const url = `http://localhost:${port}/api/resume/upload`;
-          console.log(`Attempting to upload to ${url}`);
-          response = await fetch(url, {
-            method: 'POST',
-            body: formData,
-          });
-          console.log(`Connected successfully on port ${port}`);
-          break;
-        } catch (err) {
-          console.log(`Port ${port} failed:`, err);
-          lastError = err as Error;
-          continue;
-        }
-      }
-
-      if (!response) {
-        throw new Error(
-          `Cannot connect to API. Tried ports ${ports.join(', ')}. ` +
-          `Make sure the backend is running with 'cd api && dotnet run'. ` +
-          `Last error: ${lastError?.message || 'Unknown'}`
-        );
-      }
+      const url = `${import.meta.env.VITE_API_BASE ?? ''}/api/resume/upload`;
+      const response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
 
       if (!response.ok) {
         const errorData = await response.json();

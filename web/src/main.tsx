@@ -5,7 +5,7 @@ import Login, { type User } from './Login'
 import './index.css'
 import './App.css'
 
-const API_BASE = 'http://localhost:5001'
+const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 const TOKEN_KEY = 'cc_token'
 
 interface AuthState {

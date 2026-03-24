@@ -34,7 +34,7 @@ export default function AgentChat({ userId }: { userId: string }) {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:5001/api/agent/chat', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE ?? ''}/api/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

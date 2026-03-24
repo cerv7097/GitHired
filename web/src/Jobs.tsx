@@ -30,7 +30,7 @@ const EMPLOYMENT_TYPES = [
   { label: 'Internship', value: 'INTERN' }
 ];
 
-const API_BASE = 'http://localhost:5001';
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
 function formatSalary(job: JobResult): string | null {
   if (!job.minSalary && !job.maxSalary) return null;
