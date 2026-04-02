@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using UglyToad.PdfPig;
 
 namespace CareerCoach.Services;
 
@@ -65,14 +66,28 @@ public class ResumeParser
 
         stream.Position = 0;
         var text = new StringBuilder();
-        using var reader = new PdfReader(stream);
-        for (var page = 1; page <= reader.NumberOfPages; page++)
+        using var document = UglyToad.PdfPig.PdfDocument.Open(stream);
+        foreach (var page in document.GetPages())
         {
-            var pageBytes = reader.GetPageContent(page);
-            if (pageBytes != null)
-                text.AppendLine(ExtractTextFromPdfContent(pageBytes));
+            var pageText = page.Text;
+            if (!string.IsNullOrWhiteSpace(pageText))
+                text.AppendLine(pageText);
         }
-        return CleanupExtractedText(text.ToString());
+
+        var extracted = CleanupExtractedText(text.ToString());
+        if (!string.IsNullOrWhiteSpace(extracted) && CountWords(extracted) >= 20)
+            return extracted;
+
+        stream.Position = 0;
+        var fallbackText = new StringBuilder();
+        using var fallbackReader = new PdfReader(stream);
+        for (var page = 1; page <= fallbackReader.NumberOfPages; page++)
+        {
+            var pageBytes = fallbackReader.GetPageContent(page);
+            if (pageBytes != null)
+                fallbackText.AppendLine(ExtractTextFromPdfContent(pageBytes));
+        }
+        return CleanupExtractedText(fallbackText.ToString());
     }
 
     private Task<string> ParseDocxAsync(Stream stream)
