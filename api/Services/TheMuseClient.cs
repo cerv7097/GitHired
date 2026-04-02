@@ -11,11 +11,15 @@ public class TheMuseClient
         _factory = factory;
     }
 
-    public async Task<JobSearchResult> SearchAsync(string query, string? experienceLevel = null)
+    public async Task<JobSearchResult> SearchAsync(string query, string? experienceLevel = null, string? category = null)
     {
         var apiKey = Environment.GetEnvironmentVariable("THE_MUSE_API_KEY") ?? "";
 
         var qs = $"descending=true&page=1&per_page=10&query={Uri.EscapeDataString(query)}";
+
+        // Restrict to a category when provided (e.g. "Technology" keeps results tech-relevant)
+        if (!string.IsNullOrEmpty(category))
+            qs += $"&category={Uri.EscapeDataString(category)}";
         if (!string.IsNullOrEmpty(apiKey))
             qs += $"&api_key={Uri.EscapeDataString(apiKey)}";
 

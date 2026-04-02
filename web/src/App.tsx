@@ -5,6 +5,32 @@ import Jobs from './Jobs';
 import ResumeUpload from './ResumeUpload';
 import type { User } from './Login';
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+
+interface RecommendedJob {
+  title: string;
+  company: string;
+  logoUrl?: string;
+  location: string;
+  isRemote: boolean;
+  employmentType?: string;
+  minSalary?: string;
+  maxSalary?: string;
+  salaryCurrency?: string;
+  salaryPeriod?: string;
+  descriptionSnippet?: string;
+  applyLink: string;
+  postedAt?: string;
+}
+
+interface MatchedOn {
+  roles: string[];
+  skills: string[];
+  experienceLevel: string;
+  atsScore?: number | null;
+  searchQueries?: string[];
+}
+
 function loadStoredAtsScore(userId: string) {
   if (typeof window === 'undefined') return null;
   const stored = window.localStorage.getItem(`atsScore:${userId}`);
@@ -60,6 +86,10 @@ export default function App({ user, onLogout }: AppProps) {
   const [atsScore, setAtsScore] = useState<number | null>(() => loadStoredAtsScore(user.id));
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryId | 'all'>('all');
+  const [recommendations, setRecommendations] = useState<RecommendedJob[]>([]);
+  const [recsLoading, setRecsLoading] = useState(false);
+  const [matchedOn, setMatchedOn] = useState<MatchedOn | null>(null);
+  const [recsTotalResults, setRecsTotalResults] = useState(0);
 
   const industryOptions: IndustryOption[] = [
     {
@@ -780,21 +810,72 @@ export default function App({ user, onLogout }: AppProps) {
   ];
 
   const readinessStats = [
-    { label: 'Readiness', value: '78%', meta: '+12% this week' },
-    { label: 'Matched Jobs', value: '156', meta: '24 new matches' },
-    { label: 'Skills Done', value: '5 / 8', meta: 'In progress' }
+    {
+      label: 'Resume Readiness Score',
+      value: atsScore !== null ? `${atsScore}%` : '—',
+      meta: atsScore === null ? 'Upload resume' : atsScore >= 80 ? 'Strong profile' : atsScore >= 60 ? 'Good progress' : 'Needs improvement'
+    },
+    {
+      label: 'Matched Jobs',
+      value: recsLoading ? '…' : recsTotalResults > 0 ? String(recsTotalResults) : '—',
+      meta: matchedOn ? 'Based on your resume' : 'Upload resume to match'
+    },
+    {
+      label: 'Skills Found',
+      value: matchedOn ? String(matchedOn.skills.length) : '—',
+      meta: matchedOn ? (matchedOn.skills.slice(0, 2).join(', ') || 'From resume') : 'Upload resume'
+    }
   ];
 
   const progress = [
-    { label: 'Profile', value: 80, color: 'linear-gradient(90deg,#3ac1ff,#22d3ee)' },
-    { label: 'Skills', value: 65, color: 'linear-gradient(90deg,#34d399,#4ade80)' },
-    { label: 'Coaching', value: 45, color: 'linear-gradient(90deg,#fb7185,#f97316)' }
+    {
+      label: 'Profile',
+      value: atsScore !== null ? Math.min(100, atsScore) : 10,
+      color: 'linear-gradient(90deg,#3ac1ff,#22d3ee)'
+    },
+    {
+      label: 'Skills',
+      value: matchedOn ? Math.min(100, matchedOn.skills.length * 10) : 0,
+      color: 'linear-gradient(90deg,#34d399,#4ade80)'
+    }
   ];
 
-  const matches = [
-    { title: 'Senior Product Designer', company: 'TechCorp • Remote', score: '95%' },
-    { title: 'Lead Frontend Engineer', company: 'Orbit Labs • Hybrid', score: '92%' }
-  ];
+  function fetchRecommendations() {
+    setRecsLoading(true);
+    fetch(`${API_BASE}/api/jobs/recommended?userId=${encodeURIComponent(user.id)}`)
+      .then(res => {
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error('Failed');
+        return res.json();
+      })
+      .then(data => {
+        if (data) {
+          setRecommendations(data.jobs ?? []);
+          setMatchedOn(data.matchedOn);
+          setRecsTotalResults(data.totalResults);
+          if (typeof data.matchedOn?.atsScore === 'number') {
+            setAtsScore(Math.min(100, Math.max(0, Math.round(data.matchedOn.atsScore))));
+          }
+        }
+      })
+      .catch(() => { /* silently show empty state */ })
+      .finally(() => setRecsLoading(false));
+  }
+
+  useEffect(() => {
+    setRecommendations([]);
+    setMatchedOn(null);
+    setRecsTotalResults(0);
+    setRecsLoading(false);
+  }, [user.id]);
+
+  const handleResumeUploadStart = () => {
+    setRecommendations([]);
+    setMatchedOn(null);
+    setRecsTotalResults(0);
+    setAtsScore(null);
+    setRecsLoading(true);
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -865,8 +946,13 @@ export default function App({ user, onLogout }: AppProps) {
               <div className="status-pill">SYSTEM ACTIVE</div>
               <h2>Welcome back, {user.firstName}</h2>
               <p style={{ color: '#8ea5d9', maxWidth: 420 }}>
-                Your career readiness improved by <span className="trend-positive">+12%</span> this week.
-                Keep up the momentum by refining your resume and exploring new roles.
+                {atsScore === null
+                  ? 'Upload your resume to unlock your ATS score and personalized job matches.'
+                  : atsScore >= 80
+                  ? 'Strong profile! Explore your recommended roles and start applying.'
+                  : atsScore >= 60
+                  ? 'Good foundation. Refine your resume further to increase your match rate.'
+                  : 'Your resume needs work. Review your ATS score and follow the improvement tips.'}
               </p>
             </div>
             <div className="hero-metrics">
@@ -879,10 +965,16 @@ export default function App({ user, onLogout }: AppProps) {
               </div>
               <div className="hero-metric">
                 <div className="hero-metric-label">Next Action</div>
-                <div className="hero-score">Upload</div>
-                <button className="ghost-button" onClick={() => scrollToSection(resumeSectionRef)}>
-                  Upload New Resume
-                </button>
+                <div className="hero-score">{atsScore === null ? 'Resume' : 'Explore'}</div>
+                {atsScore === null ? (
+                  <button className="ghost-button" onClick={() => scrollToSection(resumeSectionRef)}>
+                    Upload Resume
+                  </button>
+                ) : (
+                  <button className="ghost-button" onClick={() => setActiveTab('jobs')}>
+                    View Job Matches
+                  </button>
+                )}
               </div>
             </div>
           </section>
@@ -900,7 +992,12 @@ export default function App({ user, onLogout }: AppProps) {
 
             <section>
               <div className="card" ref={resumeSectionRef}>
-                <ResumeUpload userId={user.id} onAtsScoreUpdate={handleAtsScoreUpdate} />
+                <ResumeUpload
+                  userId={user.id}
+                  onAtsScoreUpdate={handleAtsScoreUpdate}
+                  onUploadStart={handleResumeUploadStart}
+                  onUploadSuccess={fetchRecommendations}
+                />
               </div>
 
               <div className="card top-matches">
@@ -908,18 +1005,55 @@ export default function App({ user, onLogout }: AppProps) {
                   <div>
                     <p className="section-title">Top Matches</p>
                     <h3>Recommended Roles</h3>
+                    {matchedOn && (
+                      <p style={{ fontSize: '0.8rem', color: '#7c91c1', marginTop: 4 }}>
+                        Matched on: {matchedOn.roles.slice(0, 2).join(', ')} · {matchedOn.experienceLevel}
+                      </p>
+                    )}
                   </div>
-                  <button className="ghost-button">View all</button>
+                  {recommendations.length > 0 && (
+                    <button className="ghost-button" onClick={() => setActiveTab('jobs')}>View all</button>
+                  )}
                 </div>
-                {matches.map(match => (
-                  <div className="match-card" key={match.title}>
-                    <div>
-                      <strong>{match.title}</strong>
-                      <p style={{ margin: '6px 0 0', color: '#8ea5d9' }}>{match.company}</p>
-                    </div>
-                    <span className="badge">{match.score}</span>
+
+                {recsLoading && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#8ea5d9', padding: '12px 0' }}>
+                    <div className="spinner" style={{ width: 16, height: 16 }} />
+                    <span>Finding matches based on your profile…</span>
                   </div>
-                ))}
+                )}
+
+                {!recsLoading && recommendations.length === 0 && (
+                  <div style={{ color: '#8ea5d9', paddingTop: 8 }}>
+                    <p style={{ marginBottom: 12 }}>Upload your resume to see personalized job matches.</p>
+                    <button className="ghost-button" onClick={() => scrollToSection(resumeSectionRef)}>
+                      Upload Resume →
+                    </button>
+                  </div>
+                )}
+
+                {!recsLoading && recommendations.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {recommendations.slice(0, 5).map((job, i) => (
+                      <div className="match-card" key={`${job.title}-${job.company}-${i}`}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <strong style={{ display: 'block' }}>{job.title}</strong>
+                          <p style={{ margin: '4px 0 0', color: '#8ea5d9', fontSize: '0.85rem' }}>
+                            {job.company}
+                            {job.location ? ` · ${job.location}` : ''}
+                            {job.isRemote ? ' · Remote' : ''}
+                          </p>
+                        </div>
+                        <a href={job.applyLink} target="_blank" rel="noreferrer" className="badge" style={{ textDecoration: 'none', flexShrink: 0 }}>
+                          Apply →
+                        </a>
+                      </div>
+                    ))}
+                    <p style={{ fontSize: '0.75rem', color: '#556080', marginTop: 4 }}>
+                      {Math.min(5, recommendations.length)} of {recsTotalResults} matches · AI-selected for your profile
+                    </p>
+                  </div>
+                )}
               </div>
             </section>
 
@@ -974,7 +1108,7 @@ export default function App({ user, onLogout }: AppProps) {
           </div>
         </>
       ) : activeTab === 'jobs' ? (
-        <Jobs />
+        <Jobs userId={user.id} initialJobs={recommendations} initialLabel={matchedOn ? `AI-recommended for your profile` : undefined} />
       ) : activeTab === 'assessment' ? (
         <Assessment />
       ) : (

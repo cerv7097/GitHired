@@ -7,6 +7,24 @@ using Microsoft.Extensions.Configuration;
 
 public record UserRecord(string Id, string Email, string FirstName, string LastName);
 
+public record UserProfileRecord(
+    string UserId,
+    string[] Skills,
+    string[] Tools,
+    string[] Roles,
+    string? ExperienceLevel,
+    string? Summary,
+    int? AtsScore,
+    string AssessmentScores,  // raw JSONB string: { "role": score }
+    string SearchHistory,      // raw JSONB string: [{ "query": "...", "timestamp": "..." }]
+    DateTime UpdatedAt,
+    string FirstName,
+    string LastName,
+    string Email,
+    string? ResumeText,
+    string Education  // raw JSONB string: [{"degree":"...","institution":"...","year":"..."}]
+);
+
 public class Db {
   private readonly string _cs;
   public Db(IConfiguration cfg) {
@@ -21,9 +39,7 @@ public class Db {
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
     var sql = """
-      DROP TABLE IF EXISTS auth_tokens;
-      DROP TABLE IF EXISTS users;
-      CREATE TABLE users (
+      CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
@@ -31,10 +47,17 @@ public class Db {
         last_name TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
-      CREATE TABLE auth_tokens (
+      CREATE TABLE IF NOT EXISTS auth_tokens (
         token TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload JSONB,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       """;
@@ -97,6 +120,185 @@ public class Db {
     await using var reader = await cmd.ExecuteReaderAsync();
     if (!await reader.ReadAsync()) return null;
     return new UserRecord(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3));
+  }
+
+  public async Task EnsureProfileTablesAsync()
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    // No FK to users — EnsureAuthTablesAsync drops/recreates users each startup,
+    // which would break a FK constraint. user_id is a soft reference.
+    var sql = """
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        user_id TEXT PRIMARY KEY,
+        skills TEXT[] NOT NULL DEFAULT '{}',
+        tools TEXT[] NOT NULL DEFAULT '{}',
+        roles TEXT[] NOT NULL DEFAULT '{}',
+        experience_level TEXT,
+        summary TEXT,
+        ats_score INT,
+        assessment_scores JSONB NOT NULL DEFAULT '{}',
+        search_history JSONB NOT NULL DEFAULT '[]',
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      """;
+
+    await using var cmd = new NpgsqlCommand(sql, con);
+    await cmd.ExecuteNonQueryAsync();
+
+    // Add columns introduced after initial schema (safe on existing DBs)
+    var migrate = """
+      ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resume_text TEXT;
+      ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS education JSONB NOT NULL DEFAULT '[]';
+      """;
+    await using var migrate_cmd = new NpgsqlCommand(migrate, con);
+    await migrate_cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task UpsertUserProfileAsync(
+    string userId,
+    string[] skills,
+    string[] tools,
+    string[] roles,
+    string? experienceLevel,
+    string? summary,
+    int? atsScore,
+    string? resumeText = null,
+    string? education = null,
+    bool replaceResumeData = false)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = replaceResumeData
+      ? """
+      INSERT INTO user_profiles (user_id, skills, tools, roles, experience_level, summary, ats_score, resume_text, education, updated_at)
+      VALUES (@uid, @skills, @tools, @roles, @exp, @summary, @ats, @resumeText, @education::jsonb, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        skills = EXCLUDED.skills,
+        tools = EXCLUDED.tools,
+        roles = EXCLUDED.roles,
+        experience_level = EXCLUDED.experience_level,
+        summary = EXCLUDED.summary,
+        ats_score = COALESCE(EXCLUDED.ats_score, user_profiles.ats_score),
+        resume_text = EXCLUDED.resume_text,
+        education = EXCLUDED.education,
+        updated_at = NOW();
+      """
+      : """
+      INSERT INTO user_profiles (user_id, skills, tools, roles, experience_level, summary, ats_score, resume_text, education, updated_at)
+      VALUES (@uid, @skills, @tools, @roles, @exp, @summary, @ats, @resumeText, @education::jsonb, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        skills = EXCLUDED.skills,
+        tools = EXCLUDED.tools,
+        roles = EXCLUDED.roles,
+        experience_level = COALESCE(EXCLUDED.experience_level, user_profiles.experience_level),
+        summary = COALESCE(EXCLUDED.summary, user_profiles.summary),
+        ats_score = COALESCE(EXCLUDED.ats_score, user_profiles.ats_score),
+        resume_text = COALESCE(EXCLUDED.resume_text, user_profiles.resume_text),
+        education = CASE WHEN EXCLUDED.education = '[]'::jsonb THEN user_profiles.education ELSE EXCLUDED.education END,
+        updated_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.Add(new NpgsqlParameter("skills", NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = skills });
+    cmd.Parameters.Add(new NpgsqlParameter("tools", NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = tools });
+    cmd.Parameters.Add(new NpgsqlParameter("roles", NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = roles });
+    cmd.Parameters.AddWithValue("exp", (object?)experienceLevel ?? DBNull.Value);
+    cmd.Parameters.AddWithValue("summary", (object?)summary ?? DBNull.Value);
+    cmd.Parameters.AddWithValue("ats", (object?)atsScore ?? DBNull.Value);
+    cmd.Parameters.AddWithValue("resumeText", (object?)resumeText ?? DBNull.Value);
+    cmd.Parameters.Add(new NpgsqlParameter("education", NpgsqlDbType.Jsonb) { Value = education ?? "[]" });
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task UpdateAtsScoreAsync(string userId, int atsScore)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      INSERT INTO user_profiles (user_id, skills, tools, roles, ats_score, updated_at)
+      VALUES (@uid, '{}', '{}', '{}', @ats, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        ats_score = EXCLUDED.ats_score,
+        updated_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("ats", atsScore);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task<UserProfileRecord?> GetUserProfileAsync(string userId)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      SELECT p.skills, p.tools, p.roles, p.experience_level, p.summary, p.ats_score,
+             p.assessment_scores, p.search_history, p.updated_at,
+             u.first_name, u.last_name, u.email,
+             p.resume_text, COALESCE(p.education::text, '[]')
+      FROM user_profiles p
+      JOIN users u ON u.id = p.user_id
+      WHERE p.user_id = @uid
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync()) return null;
+
+    return new UserProfileRecord(
+      UserId: userId,
+      Skills: reader.GetFieldValue<string[]>(0),
+      Tools: reader.GetFieldValue<string[]>(1),
+      Roles: reader.GetFieldValue<string[]>(2),
+      ExperienceLevel: reader.IsDBNull(3) ? null : reader.GetString(3),
+      Summary: reader.IsDBNull(4) ? null : reader.GetString(4),
+      AtsScore: reader.IsDBNull(5) ? null : reader.GetInt32(5),
+      AssessmentScores: reader.GetString(6),
+      SearchHistory: reader.GetString(7),
+      UpdatedAt: reader.GetDateTime(8),
+      FirstName: reader.GetString(9),
+      LastName: reader.GetString(10),
+      Email: reader.GetString(11),
+      ResumeText: reader.IsDBNull(12) ? null : reader.GetString(12),
+      Education: reader.GetString(13)
+    );
+  }
+
+  public async Task SaveAssessmentScoreAsync(string userId, string role, int score)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      INSERT INTO user_profiles (user_id, assessment_scores, updated_at)
+      VALUES (@uid, jsonb_build_object(@role::text, @score::int), NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        assessment_scores = user_profiles.assessment_scores || jsonb_build_object(@role::text, @score::int),
+        updated_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("role", role);
+    cmd.Parameters.AddWithValue("score", score);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task LogSearchQueryAsync(string userId, string query)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var entry = JsonSerializer.Serialize(new { query, timestamp = DateTime.UtcNow.ToString("O") });
+    var sql = """
+      INSERT INTO user_profiles (user_id, search_history, updated_at)
+      VALUES (@uid, jsonb_build_array(@entry::jsonb), NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        search_history = user_profiles.search_history || jsonb_build_array(@entry::jsonb),
+        updated_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("entry", entry);
+    await cmd.ExecuteNonQueryAsync();
   }
 
   public async Task SaveSessionAsync(string userId, string type, string raw)

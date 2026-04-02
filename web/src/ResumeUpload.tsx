@@ -4,12 +4,8 @@ interface ParseResult {
   success: boolean;
   word_count: number;
   character_count: number;
-  has_contact_info: boolean;
-  has_sections: boolean;
-  detected_sections: string[];
   file_name: string;
   file_type: string;
-  ats_score: number;
 }
 
 interface ToolExecution {
@@ -32,6 +28,8 @@ interface UploadResponse {
 interface ResumeUploadProps {
   userId?: string;
   onAtsScoreUpdate?: (score: number | null) => void;
+  onUploadStart?: () => void;
+  onUploadSuccess?: () => void;
 }
 
 export function extractAtsScore(result: UploadResponse | null): number | null {
@@ -52,10 +50,8 @@ export function extractAtsScore(result: UploadResponse | null): number | null {
 
   try {
     const atsResult = JSON.parse(atsTool.result);
-    if (atsResult.choices && atsResult.choices[0]?.message?.content) {
-      const content = JSON.parse(atsResult.choices[0].message.content);
-      const fromContent = sanitize(content.overall_score ?? content.score);
-      if (fromContent !== null) return fromContent;
+    if (typeof atsResult?.error === 'string' && atsResult.error.length > 0) {
+      return null;
     }
     const fromRoot = sanitize(atsResult.overall_score ?? atsResult.score);
     if (fromRoot !== null) return fromRoot;
@@ -77,7 +73,67 @@ export function extractAtsScore(result: UploadResponse | null): number | null {
   return null;
 }
 
-export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: ResumeUploadProps) {
+function renderMarkdown(text: string) {
+  const elements: React.ReactNode[] = [];
+  const lines = text.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Headings (check longest prefix first)
+    if (line.startsWith('#### ')) {
+      elements.push(<strong key={i} style={{ display: 'block', margin: '10px 0 2px' }}>{inlineFormat(line.slice(5))}</strong>);
+      i++; continue;
+    }
+    if (line.startsWith('### ')) {
+      elements.push(<h4 key={i} style={{ margin: '12px 0 4px' }}>{inlineFormat(line.slice(4))}</h4>);
+      i++; continue;
+    }
+    if (line.startsWith('## ')) {
+      elements.push(<h3 key={i} style={{ margin: '14px 0 4px' }}>{inlineFormat(line.slice(3))}</h3>);
+      i++; continue;
+    }
+    if (line.startsWith('# ')) {
+      elements.push(<h2 key={i} style={{ margin: '16px 0 6px' }}>{inlineFormat(line.slice(2))}</h2>);
+      i++; continue;
+    }
+
+    // Collect consecutive bullet lines into a single <ul>
+    if (/^(\s*[-*•]|\d+\.) /.test(line)) {
+      const items: React.ReactNode[] = [];
+      while (i < lines.length && /^(\s*[-*•]|\d+\.) /.test(lines[i])) {
+        const itemText = lines[i].replace(/^(\s*[-*•]|\d+\.) /, '');
+        items.push(<li key={i}>{inlineFormat(itemText)}</li>);
+        i++;
+      }
+      elements.push(<ul key={`ul-${i}`} style={{ margin: '6px 0', paddingLeft: 20 }}>{items}</ul>);
+      continue;
+    }
+
+    // Blank line → spacer
+    if (line.trim() === '') {
+      elements.push(<br key={i} />);
+      i++; continue;
+    }
+
+    // Regular paragraph line
+    elements.push(<p key={i} style={{ margin: '4px 0' }}>{inlineFormat(line)}</p>);
+    i++;
+  }
+
+  return elements;
+}
+
+function inlineFormat(text: string): React.ReactNode {
+  // Split on **bold** and render alternating plain/bold segments
+  const parts = text.split(/\*\*(.+?)\*\*/g);
+  return parts.map((part, idx) =>
+    idx % 2 === 1 ? <strong key={idx}>{part}</strong> : part
+  );
+}
+
+export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, onUploadStart, onUploadSuccess }: ResumeUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [targetRole, setTargetRole] = useState('');
   const [targetIndustry, setTargetIndustry] = useState('');
@@ -86,7 +142,6 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
   const [error, setError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const parserScore = result?.parse_result?.ats_score ?? null;
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -131,6 +186,7 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
     setLoading(true);
     setError(null);
     setResult(null);
+    onUploadStart?.();
 
     try {
       const url = `${import.meta.env.VITE_API_BASE ?? ''}/api/resume/upload`;
@@ -146,6 +202,7 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
 
       const data: UploadResponse = await response.json();
       setResult(data);
+      onUploadSuccess?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload resume');
     } finally {
@@ -155,14 +212,9 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
 
   // Keep parent dashboard in sync with whatever ATS score we parsed (including zeros)
   useEffect(() => {
-    if (!onAtsScoreUpdate) return;
-    if (!result) {
-      onAtsScoreUpdate(null);
-      return;
-    }
-    const derivedScore = parserScore ?? extractAtsScore(result);
-    onAtsScoreUpdate(derivedScore);
-  }, [result, parserScore, onAtsScoreUpdate]);
+    if (!onAtsScoreUpdate || !result) return;
+    onAtsScoreUpdate(extractAtsScore(result));
+  }, [result, onAtsScoreUpdate]);
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return '#54f1c5';
@@ -178,7 +230,7 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
     }
   };
 
-  const atsScore = parserScore ?? extractAtsScore(result);
+  const atsScore = extractAtsScore(result);
 
   return (
     <div className="resume-upload">
@@ -265,19 +317,14 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
                 <p>{result.parse_result.word_count}</p>
               </div>
               <div>
-                <label>Contact Info</label>
-                <p>{result.parse_result.has_contact_info ? 'Detected' : 'Missing'}</p>
+                <label>Characters</label>
+                <p>{result.parse_result.character_count.toLocaleString()}</p>
               </div>
               <div>
-                <label>Sections Found</label>
-                <p>{result.parse_result.detected_sections.length}</p>
+                <label>File Type</label>
+                <p>{result.parse_result.file_type.toUpperCase().replace('.', '')}</p>
               </div>
             </div>
-            {result.parse_result.detected_sections.length > 0 && (
-              <p className="section-list">
-                Detected sections: {result.parse_result.detected_sections.join(', ')}
-              </p>
-            )}
           </div>
 
           {atsScore !== null && (
@@ -305,7 +352,7 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate }: 
               <strong>AI Analysis & Recommendations</strong>
             </div>
             <div className="analysis-copy">
-              {result.agent_analysis.message}
+              {renderMarkdown(result.agent_analysis.message)}
             </div>
 
             <details className="tool-accordion">

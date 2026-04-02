@@ -21,10 +21,12 @@ b.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyHeader().AllowAnyMetho
 var app = b.Build();
 app.UseCors();
 
-// Ensure auth tables exist on startup (non-fatal if DB is temporarily unavailable)
+// Ensure tables exist on startup (non-fatal if DB is temporarily unavailable)
 var db = app.Services.GetRequiredService<Db>();
 try { await db.EnsureAuthTablesAsync(); }
 catch (Exception ex) { Console.WriteLine($"[WARN] Could not ensure auth tables: {ex.Message}"); }
+try { await db.EnsureProfileTablesAsync(); }
+catch (Exception ex) { Console.WriteLine($"[WARN] Could not ensure profile tables: {ex.Message}"); }
 
 app.MapGet("/", () => "API up");
 
@@ -64,7 +66,7 @@ app.MapPost("/api/resume/analyze", async (
 
     var text = r.resumeText.Length > 8000 ? r.resumeText[..8000] : r.resumeText;
 
-    var raw = await llm.ChatAsync(sys, $"Resume:\n{text}\nReturn only JSON.", model: "llama3-8b-instruct", maxTokens: 300);
+    var raw = await llm.ChatAsync(sys, $"Resume:\n{text}\nReturn only JSON.", maxTokens: 500);
 
     // 1) Extract assistant content from OpenAI-style response
     static string ExtractContent(string openaiJson)
@@ -149,6 +151,37 @@ app.MapPost("/api/resume/analyze", async (
     try { await db.SaveSessionAsync(r.userId, "resumeAnalysis", raw); }
     catch (Exception ex) { Console.WriteLine($"[WARN] SaveSession failed: {ex.Message}"); }
 
+    // upsert user profile so recommendations and GetUserProfileTool have real data
+    try
+    {
+        using var pdoc = JsonDocument.Parse(stripped);
+        var pr = pdoc.RootElement;
+
+        static string[] ExtractArr(JsonElement root, string key)
+        {
+            if (!root.TryGetProperty(key, out var el)) return Array.Empty<string>();
+            if (el.ValueKind == JsonValueKind.Array)
+                return el.EnumerateArray()
+                    .Where(x => x.ValueKind == JsonValueKind.String)
+                    .Select(x => x.GetString()!.Trim())
+                    .Where(x => x.Length > 0)
+                    .ToArray();
+            if (el.ValueKind == JsonValueKind.String)
+                return new[] { el.GetString()!.Trim() };
+            return Array.Empty<string>();
+        }
+
+        var pSkills = ExtractArr(pr, "skills");
+        var pTools  = ExtractArr(pr, "tools");
+        var pRoles  = ExtractArr(pr, "roles");
+        var pSummary = pr.TryGetProperty("summary", out var se) && se.ValueKind == JsonValueKind.String
+            ? se.GetString() : null;
+
+        if (pSkills.Length > 0 || pRoles.Length > 0)
+            await db.UpsertUserProfileAsync(r.userId, pSkills, pTools, pRoles, null, pSummary, null);
+    }
+    catch (Exception ex) { Console.WriteLine($"[WARN] Profile upsert failed: {ex.Message}"); }
+
     return Results.Json(result);
 });
 
@@ -203,6 +236,8 @@ app.MapGet("/api/agent/conversation/{conversationId}", (
 app.MapPost("/api/resume/upload", async (
     [FromServices] ResumeParser parser,
     [FromServices] CareerCoachAgent agent,
+    [FromServices] GradientClient parser_llm,
+    [FromServices] Db profile_db,
     IFormFile file,
     [FromForm] string userId,
     [FromForm] string? targetRole,
@@ -248,6 +283,101 @@ app.MapPost("/api/resume/upload", async (
             ? parseResult.Text.Substring(0, 8000) + "\n[Resume truncated for processing]"
             : parseResult.Text;
 
+        // Extract structured profile data from resume text and save to user profile
+        try
+        {
+            var extractSys =
+                "You are a resume data extractor. Extract structured data from the resume text. " +
+                "Return ONLY valid JSON, no markdown fences, no commentary. " +
+                "Only extract information directly supported by the resume text. Do not infer unrelated career paths. " +
+                "JSON keys: skills (string[]), tools (string[]), roles (string[] of job titles explicitly present in the resume or the closest direct tech equivalents), " +
+                "education (array of {degree, institution, year}), " +
+                "experience_level (one of: entry, mid, senior, lead), summary (string).";
+
+            var extractRaw = await parser_llm.ChatAsync(extractSys,
+                $"Resume:\n{resumeText[..Math.Min(6000, resumeText.Length)]}\nReturn only JSON.",
+                maxTokens: 800);
+
+            // parse the LLM response
+            using var extractDoc = JsonDocument.Parse(extractRaw);
+            var extractContent = extractDoc.RootElement
+                .GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+
+            var jsonStart = extractContent.IndexOf('{');
+            var jsonEnd = extractContent.LastIndexOf('}');
+            if (jsonStart >= 0 && jsonEnd > jsonStart)
+                extractContent = extractContent[jsonStart..(jsonEnd + 1)];
+
+            using var profileDoc = JsonDocument.Parse(extractContent);
+            var pr = profileDoc.RootElement;
+
+            static string[] ExtractArr(JsonElement root, string key)
+            {
+                if (!root.TryGetProperty(key, out var el)) return Array.Empty<string>();
+                if (el.ValueKind == JsonValueKind.Array)
+                    return el.EnumerateArray()
+                        .Where(x => x.ValueKind == JsonValueKind.String)
+                        .Select(x => x.GetString()!.Trim())
+                        .Where(x => x.Length > 0)
+                        .ToArray();
+                if (el.ValueKind == JsonValueKind.String)
+                    return new[] { el.GetString()!.Trim() };
+                return Array.Empty<string>();
+            }
+
+            var pSkills = ExtractArr(pr, "skills");
+            var pTools  = ExtractArr(pr, "tools");
+            var pRoles  = ExtractArr(pr, "roles");
+            var pExpLevel = pr.TryGetProperty("experience_level", out var expEl) && expEl.ValueKind == JsonValueKind.String
+                ? expEl.GetString() : null;
+            var pSummary = pr.TryGetProperty("summary", out var sumEl) && sumEl.ValueKind == JsonValueKind.String
+                ? sumEl.GetString() : null;
+            var pEducation = pr.TryGetProperty("education", out var eduEl)
+                ? JsonSerializer.Serialize(eduEl) : "[]";
+
+            Console.WriteLine($"[INFO] Profile extraction: skills={pSkills.Length}, roles={pRoles.Length}, tools={pTools.Length}, expLevel={pExpLevel}");
+
+            // Always save — even empty arrays anchor the profile row so recommendations can work
+            await profile_db.UpsertUserProfileAsync(
+                userId, pSkills, pTools, pRoles,
+                pExpLevel, pSummary, null,
+                resumeText: parseResult.Text,
+                education: pEducation,
+                replaceResumeData: true);
+
+            Console.WriteLine($"[INFO] Profile saved for user {userId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Profile extraction from resume failed: {ex.Message}");
+            Console.WriteLine($"[WARN] Stack: {ex.StackTrace}");
+            // Still save resume text even if extraction failed, so the profile row exists
+            try
+            {
+                await profile_db.UpsertUserProfileAsync(
+                    userId, [], [], [],
+                    null, null, null,
+                    resumeText: parseResult.Text,
+                    education: "[]",
+                    replaceResumeData: true);
+                Console.WriteLine($"[INFO] Saved bare profile (resume text only) for user {userId}");
+            }
+            catch (Exception dbEx)
+            {
+                Console.WriteLine($"[WARN] Even bare profile save failed: {dbEx.Message}");
+            }
+        }
+
+        var parserContext = JsonSerializer.Serialize(new
+        {
+            word_count = parseResult.WordCount,
+            character_count = parseResult.CharacterCount,
+            file_type = parseResult.FileType,
+            extraction_warning = parseResult.WordCount < 50
+                ? "Very few words were extracted. The file may be image-based or heavily formatted — treat content as potentially incomplete."
+                : null
+        });
+
         // Build the request message
         var requestMessage = $"I've uploaded my resume. Please analyze it for ATS compatibility and provide improvement suggestions.";
         if (!string.IsNullOrEmpty(targetRole))
@@ -258,30 +388,58 @@ app.MapPost("/api/resume/upload", async (
         {
             requestMessage += $" in the {targetIndustry} industry.";
         }
-        requestMessage += $"\n\nResume text:\n{resumeText}";
+        requestMessage +=
+            $"\n\nParser diagnostics (pass this into tool calls as parser_context when analyzing the resume):\n{parserContext}" +
+            $"\n\nResume text:\n{resumeText}";
 
         // Let the agent process it (it will automatically use analyze_ats_compatibility and improve_resume tools)
         var agentResponse = await agent.ProcessMessageAsync(conversationId, userId, requestMessage);
+
+        static int? ExtractAtsScore(IEnumerable<ToolExecution> toolsUsed)
+        {
+            var atsTool = toolsUsed.FirstOrDefault(t => t.ToolName == "analyze_ats_compatibility");
+            if (atsTool == null || string.IsNullOrWhiteSpace(atsTool.Result)) return null;
+
+            try
+            {
+                using var scoreDoc = JsonDocument.Parse(atsTool.Result);
+                var root = scoreDoc.RootElement;
+                if (root.TryGetProperty("overall_score", out var overallScore) && overallScore.TryGetInt32(out var parsedOverall))
+                    return Math.Clamp(parsedOverall, 0, 100);
+                if (root.TryGetProperty("score", out var score) && score.TryGetInt32(out var parsedScore))
+                    return Math.Clamp(parsedScore, 0, 100);
+            }
+            catch
+            {
+                if (int.TryParse(atsTool.Result.Trim(), out var parsedRaw))
+                    return Math.Clamp(parsedRaw, 0, 100);
+            }
+
+            return null;
+        }
+
+        var latestAtsScore = ExtractAtsScore(agentResponse.ToolsUsed);
+        if (latestAtsScore != null)
+        {
+            try { await profile_db.UpdateAtsScoreAsync(userId, latestAtsScore.Value); }
+            catch (Exception ex) { Console.WriteLine($"[WARN] ATS score update failed: {ex.Message}"); }
+        }
 
         return Results.Ok(new
         {
             parse_result = new
             {
-                success = parseResult.Success,
-                word_count = parseResult.WordCount,
+                success        = parseResult.Success,
+                word_count     = parseResult.WordCount,
                 character_count = parseResult.CharacterCount,
-                has_contact_info = parseResult.HasContactInfo,
-                has_sections = parseResult.HasSections,
-                detected_sections = parseResult.DetectedSections,
-                file_name = parseResult.FileName,
-                file_type = parseResult.FileType,
-                ats_score = parseResult.AtsScore
+                file_name      = parseResult.FileName,
+                file_type      = parseResult.FileType
             },
             agent_analysis = new
             {
-                message = agentResponse.Message,
-                tools_used = agentResponse.ToolsUsed,
-                conversation_id = agentResponse.ConversationId
+                message          = agentResponse.Message,
+                tools_used       = agentResponse.ToolsUsed,
+                conversation_id  = agentResponse.ConversationId
             }
         });
     }
@@ -305,14 +463,23 @@ app.MapPost("/api/resume/upload", async (
 
 app.MapGet("/api/jobs/search", async (
     [FromServices] JobAggregatorService aggregator,
+    [FromServices] Db db,
     string? query,
     string? location,
+    string? userId,
     bool remoteOnly = false,
     string? experienceLevel = null,
     string? employmentType = null) =>
 {
     var q = string.IsNullOrWhiteSpace(query) ? "software engineer" : query.Trim();
     var loc = location?.Trim().Equals("remote", StringComparison.OrdinalIgnoreCase) == true ? null : location?.Trim();
+
+    // Log search query to user profile if user is identified
+    if (!string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(query))
+    {
+        try { await db.LogSearchQueryAsync(userId, q); }
+        catch (Exception ex) { Console.WriteLine($"[WARN] LogSearchQuery failed: {ex.Message}"); }
+    }
 
     var result = await aggregator.SearchAllAsync(q, loc, remoteOnly, experienceLevel, employmentType);
     return Results.Ok(new
@@ -334,6 +501,221 @@ app.MapGet("/api/jobs/search", async (
             applyLink = j.ApplyLink,
             postedAt = j.PostedAt
         })
+    });
+});
+
+app.MapGet("/api/jobs/recommended", async (
+    [FromServices] Db db,
+    [FromServices] JobAggregatorService aggregator,
+    [FromServices] GradientClient llm,
+    string userId,
+    string? location) =>
+{
+    var profile = await db.GetUserProfileAsync(userId);
+    if (profile == null)
+        return Results.NotFound(new { error = "No profile found. Please upload your resume first." });
+
+    var isRemote = location?.Equals("remote", StringComparison.OrdinalIgnoreCase) == true;
+    var searchLocation = isRemote ? null : location?.Trim();
+
+    // Use LLM to generate 2 targeted, diverse search queries from the user's profile
+    var queries = new List<string>();
+    try
+    {
+        string profileSummary;
+        if (profile.Roles.Length > 0 || profile.Skills.Length > 0)
+        {
+            profileSummary =
+                $"Roles: {string.Join(", ", profile.Roles.Take(3))}\n" +
+                $"Skills: {string.Join(", ", profile.Skills.Take(8))}\n" +
+                $"Tools: {string.Join(", ", profile.Tools.Take(5))}\n" +
+                $"Experience level: {profile.ExperienceLevel ?? "not specified"}";
+        }
+        else if (!string.IsNullOrWhiteSpace(profile.ResumeText))
+        {
+            // Profile was saved but extraction produced no structured data — use raw resume text
+            profileSummary = $"Resume text (first 2000 chars):\n{profile.ResumeText[..Math.Min(2000, profile.ResumeText.Length)]}";
+        }
+        else
+        {
+            // No profile data at all — skip LLM, go straight to fallback
+            throw new InvalidOperationException("Profile has no structured data or resume text.");
+        }
+
+        var querySys =
+            "You are a tech job search expert. Given a candidate's tech/software profile, generate exactly 2 distinct " +
+            "job search query strings suitable for a job board (like Indeed or LinkedIn). " +
+            "Each query must be a specific tech or software job title — examples: \"Senior React Developer\", " +
+            "\"Data Engineer Python AWS\", \"DevOps Engineer Kubernetes\". " +
+            "Never generate queries for non-tech roles (e.g. sales, marketing, HR, retail, nursing). " +
+            "If the profile is unclear, default to software engineering roles. " +
+            "Return ONLY a JSON array of exactly 2 strings. No commentary, no markdown fences.";
+
+        var queryRaw = await llm.ChatAsync(querySys, profileSummary, maxTokens: 120);
+        using var queryDoc = JsonDocument.Parse(queryRaw);
+        var queryContent = queryDoc.RootElement
+            .GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+
+        var arrStart = queryContent.IndexOf('[');
+        var arrEnd = queryContent.LastIndexOf(']');
+        if (arrStart >= 0 && arrEnd > arrStart)
+        {
+            using var arrDoc = JsonDocument.Parse(queryContent[arrStart..(arrEnd + 1)]);
+            queries = arrDoc.RootElement.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.String)
+                .Select(e => e.GetString()!.Trim())
+                .Where(q => q.Length > 0)
+                .Take(2)
+                .ToList();
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[WARN] LLM query generation failed: {ex.Message}");
+    }
+
+    // Fall back to simple query if LLM failed
+    if (queries.Count == 0)
+    {
+        var topRole = profile.Roles.FirstOrDefault() ?? "software engineer";
+        var topSkills = profile.Skills.Take(2).ToArray();
+        queries.Add(string.Join(" ", new[] { topRole }.Concat(topSkills)));
+    }
+
+    Console.WriteLine($"[INFO] Recommendation search queries: {string.Join(" | ", queries)}");
+
+    // Tech keywords used to validate generated queries and post-filter irrelevant job results.
+    var techTitleKeywords = new[]
+    {
+        "engineer", "developer", "software", "data", "analyst", "architect", "devops", "sre",
+        "cloud", "backend", "frontend", "fullstack", "full stack", "full-stack", "mobile",
+        "machine learning", "ai ", " ai", "ml ", " ml", "security", "cyber", "network",
+        "infrastructure", "platform", "systems", "product manager", "technical", "tech",
+        "qa ", " qa", "quality assurance", "test", "database", "dba", "it ", " it ",
+        "scrum", "agile", "program manager", "project manager", "cto", "vp engineering",
+        "information technology", "computer", "application", "web ", "api ", "saas",
+        "blockchain", "embedded", "firmware", "ux ", " ux", "ui ", " ui", "design"
+    };
+
+    bool HasTechTitleKeyword(string value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        techTitleKeywords.Any(kw => value.Contains(kw, StringComparison.OrdinalIgnoreCase));
+
+    var profileTerms = profile.Roles
+        .Concat(profile.Skills)
+        .Concat(profile.Tools)
+        .SelectMany(v => v.Split(new[] { ' ', '/', '-', ',', '(', ')' }, StringSplitOptions.RemoveEmptyEntries))
+        .Select(v => v.Trim())
+        .Where(v => v.Length >= 3)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    bool MatchesProfile(string title, string snippet) =>
+        profileTerms.Length == 0 ||
+        profileTerms.Any(term =>
+            title.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+            snippet.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+    bool IsRelevantTechJob(JobResult job) =>
+        HasTechTitleKeyword(job.Title) && MatchesProfile(job.Title, job.DescriptionSnippet ?? "");
+
+    queries = queries
+        .Where(q => HasTechTitleKeyword(q) && MatchesProfile(q, ""))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(2)
+        .ToList();
+
+    // Run all queries and aggregate results
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var allJobs = new List<object>();
+
+    foreach (var q in queries)
+    {
+        try
+        {
+            var result = await aggregator.SearchAllAsync(q, searchLocation, isRemote, profile.ExperienceLevel, museCategory: "Technology");
+            foreach (var j in result.Jobs)
+            {
+                var key = $"{j.Company}|{j.Title}";
+                if (IsRelevantTechJob(j) && seen.Add(key))
+                {
+                    allJobs.Add(new
+                    {
+                        title = j.Title,
+                        company = j.Company,
+                        logoUrl = j.LogoUrl,
+                        location = j.Location,
+                        isRemote = j.IsRemote,
+                        employmentType = j.EmploymentType,
+                        minSalary = j.MinSalary,
+                        maxSalary = j.MaxSalary,
+                        salaryCurrency = j.SalaryCurrency,
+                        salaryPeriod = j.SalaryPeriod,
+                        descriptionSnippet = j.DescriptionSnippet,
+                        applyLink = j.ApplyLink,
+                        postedAt = j.PostedAt
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Job search for query '{q}' failed: {ex.Message}");
+        }
+    }
+
+    // If fewer than 3 results, run a broader fallback search
+    if (allJobs.Count < 3)
+    {
+        try
+        {
+            var fallbackQuery = profile.Roles.FirstOrDefault() ?? "software engineer";
+            if (!HasTechTitleKeyword(fallbackQuery) || !MatchesProfile(fallbackQuery, ""))
+                fallbackQuery = profile.Skills.FirstOrDefault(s => HasTechTitleKeyword(s)) ?? "software engineer";
+
+            var fallback = await aggregator.SearchAllAsync(fallbackQuery, searchLocation, isRemote, profile.ExperienceLevel, museCategory: "Technology");
+            foreach (var j in fallback.Jobs)
+            {
+                var key = $"{j.Company}|{j.Title}";
+                if (IsRelevantTechJob(j) && seen.Add(key))
+                {
+                    allJobs.Add(new
+                    {
+                        title = j.Title,
+                        company = j.Company,
+                        logoUrl = j.LogoUrl,
+                        location = j.Location,
+                        isRemote = j.IsRemote,
+                        employmentType = j.EmploymentType,
+                        minSalary = j.MinSalary,
+                        maxSalary = j.MaxSalary,
+                        salaryCurrency = j.SalaryCurrency,
+                        salaryPeriod = j.SalaryPeriod,
+                        descriptionSnippet = j.DescriptionSnippet,
+                        applyLink = j.ApplyLink,
+                        postedAt = j.PostedAt
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Fallback job search failed: {ex.Message}");
+        }
+    }
+
+    return Results.Ok(new
+    {
+        matchedOn = new
+        {
+            roles = profile.Roles.Take(3),
+            skills = profile.Skills.Take(5),
+            experienceLevel = profile.ExperienceLevel ?? "not specified",
+            atsScore = profile.AtsScore,
+            searchQueries = queries
+        },
+        totalResults = allJobs.Count,
+        jobs = allJobs
     });
 });
 

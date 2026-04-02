@@ -29,6 +29,11 @@ public class AnalyzeATSTool : AgentTool
             {
                 type = "string",
                 description = "The full text content of the resume to analyze"
+            },
+            parser_context = new
+            {
+                type = "string",
+                description = "Optional parser diagnostics, detected sections, and extraction quality notes from the uploaded resume"
             }
         },
         required = new[] { "resume_text" }
@@ -38,78 +43,58 @@ public class AnalyzeATSTool : AgentTool
     {
         var parsed = JsonDocument.Parse(parameters);
         var resumeText = parsed.RootElement.GetProperty("resume_text").GetString() ?? "";
+        var parserContext = parsed.RootElement.TryGetProperty("parser_context", out var parserProp)
+            ? parserProp.GetString() ?? ""
+            : "";
 
-        var systemPrompt = @"You are an ATS (Applicant Tracking System) and resume optimization expert specializing in modern hiring practices.
+        var systemPrompt = @"You are an ATS (Applicant Tracking System) expert. Your job is to evaluate the ACTUAL resume text provided by the user.
 
-ATS SCORING CRITERIA (score 0-100):
-1. FORMATTING (20 points)
-   - Simple, clean layout without tables/graphics/text boxes
-   - Standard fonts (Arial, Calibri, Times New Roman)
-   - No headers/footers containing critical info
-   - Standard section headings
+CRITICAL RULES:
+- Read the resume text carefully before writing anything.
+- Only report issues that are GENUINELY ABSENT or GENUINELY WEAK in the provided resume.
+- If a section already exists, do NOT say it is missing.
+- If achievements are already quantified with numbers, do NOT say they are missing metrics.
+- If a keyword already appears in the resume, do NOT list it as missing.
+- Do not use generic template advice. Every issue and recommendation must be grounded in what you actually read.
 
-2. CONTACT INFORMATION (15 points)
-   - Full name at top
-   - Phone number
-   - Professional email
-   - Location (city, state)
-   - LinkedIn URL
+SCORING CRITERIA (0-100):
+1. FORMATTING (20 pts) — clean layout, standard headings, no tables/graphics trapping text
+2. CONTACT INFORMATION (15 pts) — name, phone, email, location, LinkedIn/portfolio
+3. KEYWORDS & SKILLS (25 pts) — industry keywords present, technical skills explicit, action verbs used
+4. STRUCTURE & SECTIONS (20 pts) — clear headers, chronological history, no unexplained gaps
+5. CONTENT QUALITY (20 pts) — achievements over duties, quantified results, relevant content
 
-3. KEYWORDS & SKILLS (25 points)
-   - Industry-specific keywords
-   - Technical skills listed explicitly
-   - Action verbs (led, managed, developed, implemented)
-   - Measurable achievements with numbers
-
-4. STRUCTURE & SECTIONS (20 points)
-   - Clear section headers: EXPERIENCE, EDUCATION, SKILLS
-   - Chronological work history
-   - Consistent formatting
-   - No unexplained gaps
-
-5. CONTENT QUALITY (20 points)
-   - Specific accomplishments, not just duties
-   - Quantified results (increased by X%, reduced by Y)
-   - Relevant to target role
-   - No typos or grammatical errors
-
-PROVIDE DETAILED ANALYSIS:
-- Calculate exact score with breakdown by category
-- List specific issues with severity (critical/moderate/minor)
-- Provide actionable recommendations prioritized by impact
-- Identify missing keywords for target roles
-- Suggest specific improvements with examples
-
-Return response as detailed JSON:
+Return ONLY valid JSON (no markdown fences, no commentary outside the JSON):
 {
-  ""overall_score"": 75,
+  ""overall_score"": <0-100 integer>,
   ""category_scores"": {
-    ""formatting"": 18,
-    ""contact_info"": 12,
-    ""keywords_skills"": 20,
-    ""structure"": 15,
-    ""content_quality"": 10
+    ""formatting"": <0-20>,
+    ""contact_info"": <0-15>,
+    ""keywords_skills"": <0-25>,
+    ""structure"": <0-20>,
+    ""content_quality"": <0-20>
   },
   ""issues"": [
-    {""severity"": ""critical"", ""issue"": ""Missing Skills section"", ""impact"": ""ATS may not identify your technical capabilities""},
-    {""severity"": ""moderate"", ""issue"": ""Duties listed instead of achievements"", ""impact"": ""Doesn't demonstrate value/impact""}
+    {""severity"": ""critical|moderate|minor"", ""issue"": ""<specific issue found in THIS resume>"", ""impact"": ""<why it matters>""}
   ],
   ""recommendations"": [
-    {""priority"": ""high"", ""recommendation"": ""Add a dedicated SKILLS section with technical and soft skills"", ""example"": ""SKILLS\n• Programming: Python, Java, C#\n• Tools: Git, Docker, AWS""},
-    {""priority"": ""high"", ""recommendation"": ""Quantify achievements"", ""example"": ""Instead of 'Improved system performance', write 'Improved system performance by 40%, reducing load time from 5s to 3s'""}
+    {""priority"": ""high|medium|low"", ""recommendation"": ""<specific actionable change for THIS resume>"", ""example"": ""<concrete rewrite example based on actual content>""}
   ],
-  ""missing_keywords"": [""agile"", ""scrum"", ""CI/CD"", ""leadership""],
-  ""ats_friendly"": true,
-  ""pass_rate_estimate"": ""75%"",
-  ""summary"": ""Resume is mostly ATS-compatible but needs stronger keywords and quantified achievements to stand out.""
+  ""missing_keywords"": [""<keyword genuinely absent from the resume>""],
+  ""ats_friendly"": <true|false>,
+  ""analysis_confidence"": ""high|medium|low"",
+  ""pass_rate_estimate"": ""<X%>"",
+  ""summary"": ""<honest 1-2 sentence summary based on what you actually read>""
 }";
 
-        var userPrompt = $"Resume to analyze:\n\n{resumeText}";
+        var userPrompt = string.IsNullOrWhiteSpace(parserContext)
+            ? $"Resume to analyze:\n\n{resumeText}"
+            : $"Parser diagnostics:\n{parserContext}\n\nResume to analyze:\n\n{resumeText}";
 
         try
         {
-            var response = await _llm.ChatAsync(systemPrompt, userPrompt, maxTokens: 2000);
-            return response;
+            var response = await _llm.ChatAsync(systemPrompt, userPrompt, model: "openai-gpt-4o-mini", maxTokens: 4000);
+            return ExtractAssistantJson(response);
         }
         catch (Exception ex)
         {
@@ -118,6 +103,36 @@ Return response as detailed JSON:
                 error = $"Failed to analyze ATS compatibility: {ex.Message}",
                 score = 0
             });
+        }
+    }
+
+    private static string ExtractAssistantJson(string rawResponse)
+    {
+        using var doc = JsonDocument.Parse(rawResponse);
+        var content = doc.RootElement
+            .GetProperty("choices")[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString() ?? "";
+
+        // Find the outermost JSON object, regardless of surrounding text or fences
+        var start = content.IndexOf('{');
+        var end = content.LastIndexOf('}');
+        if (start >= 0 && end > start)
+        {
+            content = content[start..(end + 1)];
+        }
+
+        try
+        {
+            using var parsed = JsonDocument.Parse(content);
+            return JsonSerializer.Serialize(parsed.RootElement);
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine($"[ERROR] analyze_ats JSON parse failed: {ex.Message}");
+            Console.WriteLine($"[ERROR] Raw content ({content.Length} chars): {content[..Math.Min(500, content.Length)]}");
+            throw;
         }
     }
 }

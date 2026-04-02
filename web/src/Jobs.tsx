@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface JobResult {
   title: string;
@@ -6,14 +6,14 @@ interface JobResult {
   logoUrl?: string;
   location: string;
   isRemote: boolean;
-  employmentType: string;
+  employmentType?: string;
   minSalary?: string;
   maxSalary?: string;
   salaryCurrency?: string;
   salaryPeriod?: string;
-  descriptionSnippet: string;
+  descriptionSnippet?: string;
   applyLink: string;
-  postedAt: string;
+  postedAt?: string;
 }
 
 interface JobSearchResponse {
@@ -42,23 +42,65 @@ function formatSalary(job: JobResult): string | null {
   return `Up to ${currency} ${job.maxSalary}${period}`;
 }
 
-export default function Jobs() {
+export default function Jobs({ userId, initialJobs, initialLabel }: { userId?: string; initialJobs?: JobResult[]; initialLabel?: string }) {
   const [query, setQuery] = useState('');
   const [location, setLocation] = useState('');
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [employmentType, setEmploymentType] = useState('');
   const [page, setPage] = useState(1);
-  const [allJobs, setAllJobs] = useState<JobResult[]>([]);
+  const [allJobs, setAllJobs] = useState<JobResult[]>(initialJobs ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [hasSearched, setHasSearched] = useState((initialJobs?.length ?? 0) > 0);
+  const [searchLabel, setSearchLabel] = useState<string | null>(initialLabel ?? null);
+
+  useEffect(() => {
+    if (!userId && (initialJobs?.length ?? 0) > 0) {
+      setAllJobs(initialJobs!);
+      setHasSearched(true);
+      setSearchLabel(initialLabel ?? null);
+    }
+  }, [initialJobs, initialLabel, userId]);
+
+  useEffect(() => {
+    if (!userId || !initialLabel) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(`${API_BASE}/api/jobs/recommended?userId=${encodeURIComponent(userId)}`)
+      .then(res => {
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        if (cancelled) return;
+        setAllJobs(data.jobs ?? []);
+        setHasSearched(true);
+        setSearchLabel(initialLabel);
+        setPage(1);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError('Could not load recommended jobs. Please try again.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, initialLabel]);
 
   // Client-side filtering — no new API call needed
   const filteredJobs = allJobs.filter(job => {
     if (remoteOnly && !job.isRemote) return false;
     if (employmentType) {
       const norm = (s: string) => s.toUpperCase().replace(/[^A-Z]/g, '');
-      if (!norm(job.employmentType).includes(norm(employmentType))) return false;
+      if (!norm(job.employmentType ?? '').includes(norm(employmentType))) return false;
     }
     return true;
   });
@@ -67,12 +109,14 @@ export default function Jobs() {
     setLoading(true);
     setError(null);
     setHasSearched(true);
+    setSearchLabel(null);
 
     try {
       const params = new URLSearchParams({
         query: query.trim() || 'software engineer',
         location: location.trim(),
         page: String(pageNum),
+        ...(userId ? { userId } : {}),
       });
 
       const res = await fetch(`${API_BASE}/api/jobs/search?${params}`);
@@ -217,6 +261,12 @@ export default function Jobs() {
 
           {!loading && filteredJobs.length > 0 && (
             <>
+              {searchLabel && (
+                <div className="card" style={{ padding: '12px 20px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span className="badge">AI Picks</span>
+                  <span style={{ color: '#8ea5d9', fontSize: '0.9rem' }}>{searchLabel}</span>
+                </div>
+              )}
               <div className="jobs-list">
                 {filteredJobs.map((job, i) => {
                   const salary = formatSalary(job);

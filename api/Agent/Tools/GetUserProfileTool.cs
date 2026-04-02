@@ -17,8 +17,8 @@ public class GetUserProfileTool : AgentTool
     public override string Name => "get_user_profile";
 
     public override string Description =>
-        "Retrieves the user's profile information including skills, experience, education, " +
-        "resume analysis results, and preferences. Use this to personalize recommendations.";
+        "Retrieves the user's profile information including skills, experience, resume analysis results, " +
+        "assessment scores, and recent job search history. Use this to personalize recommendations.";
 
     public override object ParameterSchema => new
     {
@@ -34,46 +34,75 @@ public class GetUserProfileTool : AgentTool
         required = new[] { "user_id" }
     };
 
-    public override Task<string> ExecuteAsync(string parameters)
+    public override async Task<string> ExecuteAsync(string parameters)
     {
         var parsed = JsonDocument.Parse(parameters);
         var userId = parsed.RootElement.GetProperty("user_id").GetString() ?? "";
 
         try
         {
-            // In a real implementation, this would query the database
-            // For now, return a mock profile structure
-            var profile = new
+            var profile = await _db.GetUserProfileAsync(userId);
+
+            if (profile == null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    user_id = userId,
+                    found = false,
+                    message = "No profile found. The user has not uploaded a resume yet."
+                });
+            }
+
+            // Parse assessment scores and recent search history from JSONB strings
+            object assessmentScores;
+            try { assessmentScores = JsonDocument.Parse(profile.AssessmentScores).RootElement; }
+            catch { assessmentScores = new { }; }
+
+            var recentSearches = new List<string>();
+            try
+            {
+                using var histDoc = JsonDocument.Parse(profile.SearchHistory);
+                recentSearches = histDoc.RootElement.EnumerateArray()
+                    .TakeLast(10)
+                    .Select(e => e.TryGetProperty("query", out var q) ? q.GetString() ?? "" : "")
+                    .Where(q => !string.IsNullOrEmpty(q))
+                    .ToList();
+            }
+            catch { /* leave empty */ }
+
+            object educationData;
+            try { educationData = JsonDocument.Parse(profile.Education).RootElement; }
+            catch { educationData = new object[] { }; }
+
+            return JsonSerializer.Serialize(new
             {
                 user_id = userId,
-                name = "User Profile",
-                email = "user@example.com",
-                skills = new[] { "C#", "JavaScript", "SQL", "React" },
-                experience_level = "mid",
-                current_role = "Software Developer",
-                years_of_experience = 3,
-                education = new
-                {
-                    degree = "Bachelor of Science",
-                    field = "Computer Science",
-                    graduation_year = 2021
-                },
-                preferred_industries = new[] { "technology", "fintech" },
-                preferred_location = "remote",
-                resume_analyzed = true,
-                ats_score = 85,
-                last_assessment_score = 78,
-                career_goals = "Advance to senior developer role within 2 years"
-            };
-
-            return Task.FromResult(JsonSerializer.Serialize(profile));
+                found = true,
+                name = $"{profile.FirstName} {profile.LastName}",
+                email = profile.Email,
+                skills = profile.Skills,
+                tools = profile.Tools,
+                roles = profile.Roles,
+                experience_level = profile.ExperienceLevel,
+                summary = profile.Summary,
+                education = educationData,
+                ats_score = profile.AtsScore,
+                assessment_scores = assessmentScores,
+                recent_searches = recentSearches,
+                profile_updated = profile.UpdatedAt.ToString("MMM d, yyyy"),
+                resume_text = profile.ResumeText != null
+                    ? (profile.ResumeText.Length > 3000
+                        ? profile.ResumeText[..3000] + "\n[truncated]"
+                        : profile.ResumeText)
+                    : null
+            });
         }
         catch (Exception ex)
         {
-            return Task.FromResult(JsonSerializer.Serialize(new
+            return JsonSerializer.Serialize(new
             {
                 error = $"Failed to retrieve user profile: {ex.Message}"
-            }));
+            });
         }
     }
 }

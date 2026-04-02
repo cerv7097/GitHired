@@ -21,7 +21,7 @@ private readonly HttpClient _http = new();
     _http.Timeout = TimeSpan.FromMinutes(5);
   }
 
-   public async Task<string> ChatAsync(string system, string user, string model = "llama3-8b-instruct", int? maxTokens = null)
+   public async Task<string> ChatAsync(string system, string user, string model = "openai-gpt-4o-mini", int? maxTokens = null)
     {
         if (string.IsNullOrEmpty(_key))
         {

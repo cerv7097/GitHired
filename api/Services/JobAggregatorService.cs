@@ -28,14 +28,15 @@ public class JobAggregatorService
         string? location = null,
         bool remoteOnly = false,
         string? experienceLevel = null,
-        string? employmentType = null)
+        string? employmentType = null,
+        string? museCategory = null)
     {
         // Build task list — Remotive is remote-only so only include it when appropriate
         var tasks = new List<Task<JobSearchResult>>
         {
             _jSearch.SearchAsync(query, remoteOnly: remoteOnly, employmentType: employmentType),
             _adzuna.SearchAsync(query, location, remoteOnly),
-            _theMuse.SearchAsync(query, experienceLevel)
+            _theMuse.SearchAsync(query, experienceLevel, museCategory)
         };
 
         if (remoteOnly)
