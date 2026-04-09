@@ -5,7 +5,25 @@ using Npgsql;
 using NpgsqlTypes;
 using Microsoft.Extensions.Configuration;
 
-public record UserRecord(string Id, string Email, string FirstName, string LastName);
+public record UserRecord(string Id, string Email, string FirstName, string LastName, bool EmailVerified);
+
+public record AuthUserRow(
+    string Id,
+    string PasswordHash,
+    string FirstName,
+    string LastName,
+    bool EmailVerified
+);
+
+public record EmailVerificationRow(
+    string UserId,
+    string Email,
+    string FirstName,
+    string LastName,
+    bool EmailVerified,
+    string CodeHash,
+    DateTime ExpiresAt
+);
 
 public record UserProfileRecord(
     string UserId,
@@ -45,6 +63,7 @@ public class Db {
         password_hash TEXT NOT NULL,
         first_name TEXT NOT NULL,
         last_name TEXT NOT NULL,
+        email_verified_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       CREATE TABLE IF NOT EXISTS auth_tokens (
@@ -60,9 +79,21 @@ public class Db {
         payload JSONB,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS email_verification_codes (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
       """;
     await using var cmd = new NpgsqlCommand(sql, con);
     await cmd.ExecuteNonQueryAsync();
+
+    var migrate = """
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+      """;
+    await using var migrateCmd = new NpgsqlCommand(migrate, con);
+    await migrateCmd.ExecuteNonQueryAsync();
   }
 
   public async Task<string> CreateUserAsync(string email, string passwordHash, string firstName, string lastName)
@@ -81,16 +112,26 @@ public class Db {
     return id;
   }
 
-  public async Task<(string Id, string PasswordHash, string FirstName, string LastName)?> GetUserByEmailAsync(string email)
+  public async Task<AuthUserRow?> GetUserByEmailAsync(string email)
   {
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
-    var sql = "SELECT id, password_hash, first_name, last_name FROM users WHERE email = @email";
+    var sql = """
+      SELECT id, password_hash, first_name, last_name, email_verified_at IS NOT NULL
+      FROM users
+      WHERE email = @email
+      """;
     await using var cmd = new NpgsqlCommand(sql, con);
     cmd.Parameters.AddWithValue("email", email.ToLowerInvariant());
     await using var reader = await cmd.ExecuteReaderAsync();
     if (!await reader.ReadAsync()) return null;
-    return (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3));
+    return new AuthUserRow(
+      Id: reader.GetString(0),
+      PasswordHash: reader.GetString(1),
+      FirstName: reader.GetString(2),
+      LastName: reader.GetString(3),
+      EmailVerified: reader.GetBoolean(4)
+    );
   }
 
   public async Task CreateTokenAsync(string token, string userId, DateTime expiresAt)
@@ -110,7 +151,7 @@ public class Db {
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
     var sql = """
-      SELECT u.id, u.email, u.first_name, u.last_name
+      SELECT u.id, u.email, u.first_name, u.last_name, u.email_verified_at IS NOT NULL
       FROM auth_tokens t
       JOIN users u ON u.id = t.user_id
       WHERE t.token = @token AND t.expires_at > NOW()
@@ -119,7 +160,71 @@ public class Db {
     cmd.Parameters.AddWithValue("token", token);
     await using var reader = await cmd.ExecuteReaderAsync();
     if (!await reader.ReadAsync()) return null;
-    return new UserRecord(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3));
+    return new UserRecord(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetBoolean(4));
+  }
+
+  public async Task SaveEmailVerificationCodeAsync(string userId, string codeHash, DateTime expiresAt)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      INSERT INTO email_verification_codes (user_id, code_hash, expires_at, created_at)
+      VALUES (@uid, @hash, @exp, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        code_hash = EXCLUDED.code_hash,
+        expires_at = EXCLUDED.expires_at,
+        created_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("hash", codeHash);
+    cmd.Parameters.AddWithValue("exp", expiresAt);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task<EmailVerificationRow?> GetEmailVerificationByEmailAsync(string email)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      SELECT u.id, u.email, u.first_name, u.last_name, u.email_verified_at IS NOT NULL,
+             v.code_hash, v.expires_at
+      FROM users u
+      LEFT JOIN email_verification_codes v ON v.user_id = u.id
+      WHERE u.email = @email
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("email", email.ToLowerInvariant());
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync()) return null;
+    if (reader.IsDBNull(5) || reader.IsDBNull(6)) return null;
+
+    return new EmailVerificationRow(
+      UserId: reader.GetString(0),
+      Email: reader.GetString(1),
+      FirstName: reader.GetString(2),
+      LastName: reader.GetString(3),
+      EmailVerified: reader.GetBoolean(4),
+      CodeHash: reader.GetString(5),
+      ExpiresAt: reader.GetDateTime(6)
+    );
+  }
+
+  public async Task MarkEmailVerifiedAsync(string userId)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      UPDATE users
+      SET email_verified_at = COALESCE(email_verified_at, NOW())
+      WHERE id = @uid;
+
+      DELETE FROM email_verification_codes
+      WHERE user_id = @uid;
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    await cmd.ExecuteNonQueryAsync();
   }
 
   public async Task EnsureProfileTablesAsync()

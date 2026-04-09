@@ -15,6 +15,7 @@ b.Services.AddSingleton<RemotiveClient>();
 b.Services.AddSingleton<JobAggregatorService>();
 b.Services.AddSingleton<CareerCoachAgent>();
 b.Services.AddSingleton<ResumeParser>();
+b.Services.AddSingleton<EmailSender>();
 b.Services.AddSingleton<AuthService>();
 b.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
 
@@ -266,9 +267,14 @@ app.MapPost("/api/resume/upload", async (
 
     try
     {
+        var uploadSw = System.Diagnostics.Stopwatch.StartNew();
+
         // Parse the resume file
+        var parseSw = System.Diagnostics.Stopwatch.StartNew();
         bufferedStream.Position = 0;
         var parseResult = await parser.ParseResumeAsync(bufferedStream, normalizedFileName);
+        parseSw.Stop();
+        Console.WriteLine($"[TIMING] Resume parsing completed in {parseSw.ElapsedMilliseconds}ms");
 
         if (!parseResult.Success)
         {
@@ -283,20 +289,58 @@ app.MapPost("/api/resume/upload", async (
             ? parseResult.Text.Substring(0, 8000) + "\n[Resume truncated for processing]"
             : parseResult.Text;
 
-        // Extract structured profile data from resume text and save to user profile
-        try
+        var parserContext = JsonSerializer.Serialize(new
         {
-            var extractSys =
-                "You are a resume data extractor. Extract structured data from the resume text. " +
-                "Return ONLY valid JSON, no markdown fences, no commentary. " +
-                "Only extract information directly supported by the resume text. Do not infer unrelated career paths. " +
-                "JSON keys: skills (string[]), tools (string[]), roles (string[] of job titles explicitly present in the resume or the closest direct tech equivalents), " +
-                "education (array of {degree, institution, year}), " +
-                "experience_level (one of: entry, mid, senior, lead), summary (string).";
+            word_count = parseResult.WordCount,
+            character_count = parseResult.CharacterCount,
+            file_type = parseResult.FileType,
+            extraction_warning = parseResult.WordCount < 50
+                ? "Very few words were extracted. The file may be image-based or heavily formatted — treat content as potentially incomplete."
+                : null
+        });
 
-            var extractRaw = await parser_llm.ChatAsync(extractSys,
-                $"Resume:\n{resumeText[..Math.Min(6000, resumeText.Length)]}\nReturn only JSON.",
-                maxTokens: 800);
+        // Build the request message
+        var requestMessage = $"I've uploaded my resume. Please analyze it for ATS compatibility and provide improvement suggestions.";
+        if (!string.IsNullOrEmpty(targetRole))
+        {
+            requestMessage += $" I'm targeting a {targetRole} position.";
+        }
+        if (!string.IsNullOrEmpty(targetIndustry))
+        {
+            requestMessage += $" in the {targetIndustry} industry.";
+        }
+        requestMessage +=
+            $"\n\nParser diagnostics (pass this into tool calls as parser_context when analyzing the resume):\n{parserContext}" +
+            $"\n\nResume text:\n{resumeText}";
+
+        var profileSaveTask = ExtractAndSaveProfileAsync();
+        var agentSw = System.Diagnostics.Stopwatch.StartNew();
+        var agentTask = agent.ProcessMessageAsync(conversationId, userId, requestMessage);
+
+        await Task.WhenAll(profileSaveTask, agentTask);
+        agentSw.Stop();
+        Console.WriteLine($"[TIMING] Agent analysis completed in {agentSw.ElapsedMilliseconds}ms");
+
+        var agentResponse = await agentTask;
+        uploadSw.Stop();
+        Console.WriteLine($"[TIMING] Total /api/resume/upload completed in {uploadSw.ElapsedMilliseconds}ms");
+
+        async Task ExtractAndSaveProfileAsync()
+        {
+            var profileSw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var extractSys =
+                    "You are a resume data extractor. Extract structured data from the resume text. " +
+                    "Return ONLY valid JSON, no markdown fences, no commentary. " +
+                    "Only extract information directly supported by the resume text. Do not infer unrelated career paths. " +
+                    "JSON keys: skills (string[]), tools (string[]), roles (string[] of job titles explicitly present in the resume or the closest direct tech equivalents), " +
+                    "education (array of {degree, institution, year}), " +
+                    "experience_level (one of: entry, mid, senior, lead), summary (string).";
+
+                var extractRaw = await parser_llm.ChatAsync(extractSys,
+                    $"Resume:\n{resumeText[..Math.Min(6000, resumeText.Length)]}\nReturn only JSON.",
+                    maxTokens: 800);
 
             // parse the LLM response
             using var extractDoc = JsonDocument.Parse(extractRaw);
@@ -338,62 +382,40 @@ app.MapPost("/api/resume/upload", async (
             Console.WriteLine($"[INFO] Profile extraction: skills={pSkills.Length}, roles={pRoles.Length}, tools={pTools.Length}, expLevel={pExpLevel}");
 
             // Always save — even empty arrays anchor the profile row so recommendations can work
-            await profile_db.UpsertUserProfileAsync(
-                userId, pSkills, pTools, pRoles,
-                pExpLevel, pSummary, null,
-                resumeText: parseResult.Text,
-                education: pEducation,
-                replaceResumeData: true);
-
-            Console.WriteLine($"[INFO] Profile saved for user {userId}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[WARN] Profile extraction from resume failed: {ex.Message}");
-            Console.WriteLine($"[WARN] Stack: {ex.StackTrace}");
-            // Still save resume text even if extraction failed, so the profile row exists
-            try
-            {
                 await profile_db.UpsertUserProfileAsync(
-                    userId, [], [], [],
-                    null, null, null,
+                    userId, pSkills, pTools, pRoles,
+                    pExpLevel, pSummary, null,
                     resumeText: parseResult.Text,
-                    education: "[]",
+                    education: pEducation,
                     replaceResumeData: true);
-                Console.WriteLine($"[INFO] Saved bare profile (resume text only) for user {userId}");
+
+                profileSw.Stop();
+                Console.WriteLine($"[TIMING] Profile extraction/save completed in {profileSw.ElapsedMilliseconds}ms");
+                Console.WriteLine($"[INFO] Profile saved for user {userId}");
             }
-            catch (Exception dbEx)
+            catch (Exception ex)
             {
-                Console.WriteLine($"[WARN] Even bare profile save failed: {dbEx.Message}");
+                profileSw.Stop();
+                Console.WriteLine($"[TIMING] Profile extraction/save failed after {profileSw.ElapsedMilliseconds}ms");
+                Console.WriteLine($"[WARN] Profile extraction from resume failed: {ex.Message}");
+                Console.WriteLine($"[WARN] Stack: {ex.StackTrace}");
+                // Still save resume text even if extraction failed, so the profile row exists
+                try
+                {
+                    await profile_db.UpsertUserProfileAsync(
+                        userId, [], [], [],
+                        null, null, null,
+                        resumeText: parseResult.Text,
+                        education: "[]",
+                        replaceResumeData: true);
+                    Console.WriteLine($"[INFO] Saved bare profile (resume text only) for user {userId}");
+                }
+                catch (Exception dbEx)
+                {
+                    Console.WriteLine($"[WARN] Even bare profile save failed: {dbEx.Message}");
+                }
             }
         }
-
-        var parserContext = JsonSerializer.Serialize(new
-        {
-            word_count = parseResult.WordCount,
-            character_count = parseResult.CharacterCount,
-            file_type = parseResult.FileType,
-            extraction_warning = parseResult.WordCount < 50
-                ? "Very few words were extracted. The file may be image-based or heavily formatted — treat content as potentially incomplete."
-                : null
-        });
-
-        // Build the request message
-        var requestMessage = $"I've uploaded my resume. Please analyze it for ATS compatibility and provide improvement suggestions.";
-        if (!string.IsNullOrEmpty(targetRole))
-        {
-            requestMessage += $" I'm targeting a {targetRole} position.";
-        }
-        if (!string.IsNullOrEmpty(targetIndustry))
-        {
-            requestMessage += $" in the {targetIndustry} industry.";
-        }
-        requestMessage +=
-            $"\n\nParser diagnostics (pass this into tool calls as parser_context when analyzing the resume):\n{parserContext}" +
-            $"\n\nResume text:\n{resumeText}";
-
-        // Let the agent process it (it will automatically use analyze_ats_compatibility and improve_resume tools)
-        var agentResponse = await agent.ProcessMessageAsync(conversationId, userId, requestMessage);
 
         static int? ExtractAtsScore(IEnumerable<ToolExecution> toolsUsed)
         {
@@ -731,8 +753,13 @@ app.MapPost("/api/auth/register", async (
 
     try
     {
-        var (token, user) = await auth.RegisterAsync(req.Email, req.Password, req.FirstName, req.LastName);
-        return Results.Ok(new { token, user = new { user.Id, user.Email, user.FirstName, user.LastName } });
+        var user = await auth.RegisterAsync(req.Email, req.Password, req.FirstName, req.LastName);
+        return Results.Ok(new
+        {
+            requiresEmailVerification = true,
+            message = "Verification code sent.",
+            user = new { user.Id, user.Email, user.FirstName, user.LastName, user.EmailVerified }
+        });
     }
     catch (InvalidOperationException ex)
     {
@@ -742,6 +769,64 @@ app.MapPost("/api/auth/register", async (
     {
         Console.WriteLine($"[ERROR] Register failed: {ex.Message}");
         return Results.Problem(detail: ex.Message, statusCode: 500, title: "Registration error");
+    }
+});
+
+app.MapPost("/api/auth/verify-email", async (
+    [FromServices] AuthService auth,
+    [FromBody] VerifyEmailRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Code))
+        return Results.BadRequest(new { error = "Email and verification code are required." });
+
+    try
+    {
+        var (token, user) = await auth.VerifyEmailAsync(req.Email, req.Code.Trim());
+        return Results.Ok(new
+        {
+            token,
+            user = new { user.Id, user.Email, user.FirstName, user.LastName, user.EmailVerified }
+        });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Email verification failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Email verification error");
+    }
+});
+
+app.MapPost("/api/auth/resend-verification", async (
+    [FromServices] AuthService auth,
+    [FromBody] ResendVerificationRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email))
+        return Results.BadRequest(new { error = "Email is required." });
+
+    try
+    {
+        await auth.ResendVerificationCodeAsync(req.Email);
+        return Results.Ok(new { message = "Verification code sent." });
+    }
+    catch (KeyNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Resend verification failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Resend verification error");
     }
 });
 
@@ -755,11 +840,19 @@ app.MapPost("/api/auth/login", async (
     try
     {
         var (token, user) = await auth.LoginAsync(req.Email, req.Password);
-        return Results.Ok(new { token, user = new { user.Id, user.Email, user.FirstName, user.LastName } });
+        return Results.Ok(new
+        {
+            token,
+            user = new { user.Id, user.Email, user.FirstName, user.LastName, user.EmailVerified }
+        });
     }
     catch (UnauthorizedAccessException)
     {
         return Results.Unauthorized();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message, requiresEmailVerification = true });
     }
     catch (Exception ex)
     {
@@ -780,7 +873,7 @@ app.MapGet("/api/auth/me", async (
     var user = await auth.ValidateTokenAsync(token);
     if (user == null) return Results.Unauthorized();
 
-    return Results.Ok(new { user.Id, user.Email, user.FirstName, user.LastName });
+    return Results.Ok(new { user.Id, user.Email, user.FirstName, user.LastName, user.EmailVerified });
 });
 
 app.Run();
@@ -788,4 +881,6 @@ app.Run();
 record Analyze(string userId, string resumeText);
 record AgentChatRequest(string UserId, string Message, string? ConversationId);
 record RegisterRequest(string Email, string Password, string FirstName, string LastName);
+record VerifyEmailRequest(string Email, string Code);
+record ResendVerificationRequest(string Email);
 record LoginRequest(string Email, string Password);

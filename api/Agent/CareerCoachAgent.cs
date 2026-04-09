@@ -121,43 +121,50 @@ public class CareerCoachAgent
             // Check if assistant wants to call tools
             if (assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Any())
             {
-                // Execute each tool call
-                foreach (var toolCall in assistantMessage.ToolCalls)
-                {
-                    var tool = _toolRegistry.GetTool(toolCall.Function.Name);
-                    if (tool == null)
+                var toolResults = await Task.WhenAll(
+                    assistantMessage.ToolCalls.Select(async toolCall =>
                     {
-                        // Tool not found, add error message
-                        messages.Add(new ConversationMessage
+                        var tool = _toolRegistry.GetTool(toolCall.Function.Name);
+                        if (tool == null)
                         {
-                            Role = "tool",
-                            ToolCallId = toolCall.Id,
-                            Name = toolCall.Function.Name,
-                            Content = JsonSerializer.Serialize(new { error = "Tool not found" })
-                        });
-                        continue;
-                    }
+                            var missingToolResult = JsonSerializer.Serialize(new { error = "Tool not found" });
+                            return new
+                            {
+                                Execution = (ToolExecution?)null,
+                                Message = new ConversationMessage
+                                {
+                                    Role = "tool",
+                                    ToolCallId = toolCall.Id,
+                                    Name = toolCall.Function.Name,
+                                    Content = missingToolResult
+                                }
+                            };
+                        }
 
-                    // Execute the tool
-                    var result = await tool.ExecuteAsync(toolCall.Function.Arguments);
+                        var result = await tool.ExecuteAsync(toolCall.Function.Arguments);
+                        return new
+                        {
+                            Execution = (ToolExecution?)new ToolExecution
+                            {
+                                ToolName = toolCall.Function.Name,
+                                Arguments = toolCall.Function.Arguments,
+                                Result = result
+                            },
+                            Message = new ConversationMessage
+                            {
+                                Role = "tool",
+                                ToolCallId = toolCall.Id,
+                                Name = toolCall.Function.Name,
+                                Content = result
+                            }
+                        };
+                    })
+                );
 
-                    // Record tool execution
-                    toolExecutions.Add(new ToolExecution
-                    {
-                        ToolName = toolCall.Function.Name,
-                        Arguments = toolCall.Function.Arguments,
-                        Result = result
-                    });
-
-                    // Add tool result to conversation
-                    messages.Add(new ConversationMessage
-                    {
-                        Role = "tool",
-                        ToolCallId = toolCall.Id,
-                        Name = toolCall.Function.Name,
-                        Content = result
-                    });
-                }
+                toolExecutions.AddRange(toolResults
+                    .Where(r => r.Execution != null)
+                    .Select(r => r.Execution!));
+                messages.AddRange(toolResults.Select(r => r.Message));
 
                 // Continue loop to let assistant process tool results
                 continue;
