@@ -93,6 +93,88 @@ public class AuthService
         return (token, user);
     }
 
+    public async Task RequestPasswordResetAsync(string email)
+    {
+        var row = await _db.GetUserByEmailAsync(email);
+        // Return silently if account not found (security — don't reveal existence)
+        if (row == null || !row.EmailVerified) return;
+
+        var code = GenerateVerificationCode();
+        var expiresAt = DateTime.UtcNow.Add(VerificationCodeLifetime);
+        var codeHash = BCrypt.Net.BCrypt.HashPassword(code);
+
+        await _db.SavePasswordResetCodeAsync(row.Id, codeHash, expiresAt);
+        await _emailSender.SendPasswordResetCodeAsync(email.ToLowerInvariant(), row.FirstName, code, expiresAt);
+        _logger.LogInformation("Issued password reset code for user {UserId}", row.Id);
+    }
+
+    public async Task ResetPasswordAsync(string email, string code, string newPassword)
+    {
+        var row = await _db.GetUserByEmailAsync(email);
+        if (row == null)
+            throw new UnauthorizedAccessException("Invalid or expired reset code.");
+
+        var resetRow = await _db.GetPasswordResetByEmailAsync(email);
+        if (resetRow == null)
+            throw new UnauthorizedAccessException("Invalid or expired reset code.");
+        if (resetRow.ExpiresAt <= DateTime.UtcNow)
+            throw new UnauthorizedAccessException("Reset code has expired.");
+        if (!BCrypt.Net.BCrypt.Verify(code, resetRow.CodeHash))
+            throw new UnauthorizedAccessException("Invalid or expired reset code.");
+
+        var newHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        await _db.UpdatePasswordHashAsync(row.Id, newHash);
+        _logger.LogInformation("Password reset completed for user {UserId}", row.Id);
+    }
+
+    public async Task ChangePasswordAsync(string userId, string currentPassword, string newPassword)
+    {
+        var row = await _db.GetAuthUserByIdAsync(userId);
+        if (row == null)
+            throw new UnauthorizedAccessException("User not found.");
+        if (!BCrypt.Net.BCrypt.Verify(currentPassword, row.PasswordHash))
+            throw new UnauthorizedAccessException("Current password is incorrect.");
+
+        var newHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        await _db.UpdatePasswordHashAsync(userId, newHash);
+        _logger.LogInformation("Password changed for user {UserId}", userId);
+    }
+
+    public async Task RequestEmailChangeAsync(string userId, string newEmail, string firstName)
+    {
+        var existing = await _db.GetUserByEmailAsync(newEmail);
+        if (existing != null)
+            throw new InvalidOperationException("That email address is already in use.");
+
+        var code = GenerateVerificationCode();
+        var expiresAt = DateTime.UtcNow.Add(VerificationCodeLifetime);
+        var codeHash = BCrypt.Net.BCrypt.HashPassword(code);
+
+        await _db.SaveEmailChangeRequestAsync(userId, newEmail, codeHash, expiresAt);
+        await _emailSender.SendEmailChangeCodeAsync(newEmail, firstName, newEmail, code, expiresAt);
+        _logger.LogInformation("Issued email change code for user {UserId}", userId);
+    }
+
+    public async Task<string> ConfirmEmailChangeAsync(string userId, string code)
+    {
+        var changeRow = await _db.GetEmailChangeRequestByUserIdAsync(userId);
+        if (changeRow == null)
+            throw new UnauthorizedAccessException("No pending email change request.");
+        if (changeRow.ExpiresAt <= DateTime.UtcNow)
+            throw new UnauthorizedAccessException("Email change code has expired.");
+        if (!BCrypt.Net.BCrypt.Verify(code, changeRow.CodeHash))
+            throw new UnauthorizedAccessException("Invalid confirmation code.");
+
+        // Ensure the new email is still unclaimed
+        var conflict = await _db.GetUserByEmailAsync(changeRow.NewEmail);
+        if (conflict != null && conflict.Id != userId)
+            throw new InvalidOperationException("That email address is already in use.");
+
+        await _db.UpdateEmailAsync(userId, changeRow.NewEmail);
+        _logger.LogInformation("Email changed for user {UserId}", userId);
+        return changeRow.NewEmail;
+    }
+
     public async Task ResendVerificationCodeAsync(string email)
     {
         var row = await _db.GetUserByEmailAsync(email);

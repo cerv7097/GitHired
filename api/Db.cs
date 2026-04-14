@@ -25,6 +25,9 @@ public record EmailVerificationRow(
     DateTime ExpiresAt
 );
 
+public record PasswordResetRow(string UserId, string CodeHash, DateTime ExpiresAt);
+public record EmailChangeRow(string UserId, string NewEmail, string CodeHash, DateTime ExpiresAt);
+
 public record UserProfileRecord(
     string UserId,
     string[] Skills,
@@ -85,6 +88,19 @@ public class Db {
         expires_at TIMESTAMPTZ NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS password_reset_codes (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS email_change_requests (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        new_email TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
       """;
     await using var cmd = new NpgsqlCommand(sql, con);
     await cmd.ExecuteNonQueryAsync();
@@ -110,6 +126,28 @@ public class Db {
     cmd.Parameters.AddWithValue("ln", lastName);
     await cmd.ExecuteNonQueryAsync();
     return id;
+  }
+
+  public async Task<AuthUserRow?> GetAuthUserByIdAsync(string userId)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      SELECT id, password_hash, first_name, last_name, email_verified_at IS NOT NULL
+      FROM users
+      WHERE id = @uid
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync()) return null;
+    return new AuthUserRow(
+      Id: reader.GetString(0),
+      PasswordHash: reader.GetString(1),
+      FirstName: reader.GetString(2),
+      LastName: reader.GetString(3),
+      EmailVerified: reader.GetBoolean(4)
+    );
   }
 
   public async Task<AuthUserRow?> GetUserByEmailAsync(string email)
@@ -403,6 +441,103 @@ public class Db {
     await using var cmd = new NpgsqlCommand(sql, con);
     cmd.Parameters.AddWithValue("uid", userId);
     cmd.Parameters.AddWithValue("entry", entry);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task SavePasswordResetCodeAsync(string userId, string codeHash, DateTime expiresAt)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      INSERT INTO password_reset_codes (user_id, code_hash, expires_at, created_at)
+      VALUES (@uid, @hash, @exp, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        code_hash = EXCLUDED.code_hash,
+        expires_at = EXCLUDED.expires_at,
+        created_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("hash", codeHash);
+    cmd.Parameters.AddWithValue("exp", expiresAt);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task<PasswordResetRow?> GetPasswordResetByEmailAsync(string email)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      SELECT r.user_id, r.code_hash, r.expires_at
+      FROM password_reset_codes r
+      JOIN users u ON u.id = r.user_id
+      WHERE u.email = @email
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("email", email.ToLowerInvariant());
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync()) return null;
+    return new PasswordResetRow(reader.GetString(0), reader.GetString(1), reader.GetDateTime(2));
+  }
+
+  public async Task UpdatePasswordHashAsync(string userId, string newHash)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      UPDATE users SET password_hash = @hash WHERE id = @uid;
+      DELETE FROM password_reset_codes WHERE user_id = @uid;
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("hash", newHash);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task SaveEmailChangeRequestAsync(string userId, string newEmail, string codeHash, DateTime expiresAt)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      INSERT INTO email_change_requests (user_id, new_email, code_hash, expires_at, created_at)
+      VALUES (@uid, @newEmail, @hash, @exp, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        new_email = EXCLUDED.new_email,
+        code_hash = EXCLUDED.code_hash,
+        expires_at = EXCLUDED.expires_at,
+        created_at = NOW();
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("newEmail", newEmail.ToLowerInvariant());
+    cmd.Parameters.AddWithValue("hash", codeHash);
+    cmd.Parameters.AddWithValue("exp", expiresAt);
+    await cmd.ExecuteNonQueryAsync();
+  }
+
+  public async Task<EmailChangeRow?> GetEmailChangeRequestByUserIdAsync(string userId)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = "SELECT user_id, new_email, code_hash, expires_at FROM email_change_requests WHERE user_id = @uid";
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    await using var reader = await cmd.ExecuteReaderAsync();
+    if (!await reader.ReadAsync()) return null;
+    return new EmailChangeRow(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDateTime(3));
+  }
+
+  public async Task UpdateEmailAsync(string userId, string newEmail)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      UPDATE users SET email = @email WHERE id = @uid;
+      DELETE FROM email_change_requests WHERE user_id = @uid;
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.AddWithValue("email", newEmail.ToLowerInvariant());
     await cmd.ExecuteNonQueryAsync();
   }
 

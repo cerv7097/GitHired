@@ -78,13 +78,119 @@ interface ResourceCategory {
 interface AppProps {
   user: User;
   onLogout: () => void;
+  onUserUpdate: (updated: User) => void;
 }
 
-export default function App({ user, onLogout }: AppProps) {
+export default function App({ user, onLogout, onUserUpdate }: AppProps) {
   const resumeSectionRef = useRef<HTMLDivElement | null>(null);
   const chatSectionRef = useRef<HTMLDivElement | null>(null);
   const [atsScore, setAtsScore] = useState<number | null>(() => loadStoredAtsScore(user.id));
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'password' | 'email'>('password');
+
+  // Change Password state
+  const [cpCurrent, setCpCurrent] = useState('');
+  const [cpNew, setCpNew] = useState('');
+  const [cpConfirm, setCpConfirm] = useState('');
+  const [cpLoading, setCpLoading] = useState(false);
+  const [cpError, setCpError] = useState<string | null>(null);
+  const [cpSuccess, setCpSuccess] = useState<string | null>(null);
+
+  // Change Email state
+  const [ceNewEmail, setCeNewEmail] = useState('');
+  const [ceCode, setCeCode] = useState('');
+  const [ceStep, setCeStep] = useState<'request' | 'confirm'>('request');
+  const [ceLoading, setCeLoading] = useState(false);
+  const [ceError, setCeError] = useState<string | null>(null);
+  const [ceSuccess, setCeSuccess] = useState<string | null>(null);
+
+  function openSettings(tab: 'password' | 'email') {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+    setProfileMenuOpen(false);
+    setCpCurrent(''); setCpNew(''); setCpConfirm(''); setCpError(null); setCpSuccess(null);
+    setCeNewEmail(''); setCeCode(''); setCeStep('request'); setCeError(null); setCeSuccess(null);
+  }
+
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setCpError(null);
+    setCpSuccess(null);
+    if (cpNew !== cpConfirm) { setCpError('New passwords do not match.'); return; }
+    if (cpNew.length < 6) { setCpError('New password must be at least 6 characters.'); return; }
+    setCpLoading(true);
+    try {
+      const token = localStorage.getItem('cc_token');
+      const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ currentPassword: cpCurrent, newPassword: cpNew }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setCpError(data.error ?? 'Failed to update password.'); return; }
+      setCpSuccess(data.message ?? 'Password updated successfully.');
+      setCpCurrent(''); setCpNew(''); setCpConfirm('');
+    } catch {
+      setCpError('Could not reach the server.');
+    } finally {
+      setCpLoading(false);
+    }
+  }
+
+  async function sendEmailChangeCode() {
+    setCeError(null);
+    setCeSuccess(null);
+    setCeLoading(true);
+    try {
+      const token = localStorage.getItem('cc_token');
+      const res = await fetch(`${API_BASE}/api/auth/request-email-change`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ newEmail: ceNewEmail }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setCeError(data.error ?? 'Failed to send confirmation code.'); return; }
+      setCeSuccess(data.message ?? 'Confirmation code sent to your new email.');
+      setCeStep('confirm');
+    } catch {
+      setCeError('Could not reach the server.');
+    } finally {
+      setCeLoading(false);
+    }
+  }
+
+  async function handleRequestEmailChange(e: React.FormEvent) {
+    e.preventDefault();
+    await sendEmailChangeCode();
+  }
+
+  async function handleConfirmEmailChange(e: React.FormEvent) {
+    e.preventDefault();
+    setCeError(null);
+    setCeSuccess(null);
+    setCeLoading(true);
+    try {
+      const token = localStorage.getItem('cc_token');
+      const res = await fetch(`${API_BASE}/api/auth/confirm-email-change`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ code: ceCode }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setCeError(data.error ?? 'Confirmation failed.'); return; }
+      setCeSuccess('Email updated successfully!');
+      onUserUpdate({ ...user, email: data.newEmail });
+      setCeStep('request');
+      setCeNewEmail('');
+      setCeCode('');
+    } catch {
+      setCeError('Could not reach the server.');
+    } finally {
+      setCeLoading(false);
+    }
+  }
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryId | 'all'>('all');
   const [recommendations, setRecommendations] = useState<RecommendedJob[]>([]);
   const [recsLoading, setRecsLoading] = useState(false);
@@ -930,12 +1036,32 @@ export default function App({ user, onLogout }: AppProps) {
 
         <div className="nav-profile">
           <span className="nav-pill status-pill">● System Active</span>
-          <div className="nav-brand-icon" aria-label="User initials" style={{ cursor: 'default' }}>
-            {user.firstName[0]}{user.lastName[0]}
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className={`profile-trigger${profileMenuOpen ? ' open' : ''}`}
+              aria-label="Open profile menu"
+              onClick={() => setProfileMenuOpen(o => !o)}
+            >
+              <span className="profile-initials">{user.firstName[0]}{user.lastName[0]}</span>
+              <svg className="profile-settings-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+            {profileMenuOpen && (
+              <div className="profile-dropdown">
+                <div className="profile-dropdown-header">
+                  <div style={{ fontWeight: 600 }}>{user.firstName} {user.lastName}</div>
+                  <div style={{ fontSize: '0.78rem', color: '#7c91c1', marginTop: 2 }}>{user.email}</div>
+                </div>
+                <button type="button" onClick={() => openSettings('password')}>Change Password</button>
+                <button type="button" onClick={() => openSettings('email')}>Change Email</button>
+                <div className="profile-dropdown-divider" />
+                <button type="button" onClick={onLogout} style={{ color: '#f87171' }}>Sign Out</button>
+              </div>
+            )}
           </div>
-          <button type="button" className="ghost-button" onClick={onLogout} style={{ fontSize: '0.8rem', padding: '6px 12px' }}>
-            Sign Out
-          </button>
         </div>
       </header>
 
@@ -1220,6 +1346,88 @@ export default function App({ user, onLogout }: AppProps) {
             </div>
           </div>
         </section>
+      )}
+
+      {/* Settings Modal */}
+      {settingsOpen && (
+        <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
+          <div className="modal-card card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Account Settings</h3>
+              <button type="button" className="ghost-button modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close">✕</button>
+            </div>
+
+            <div className="modal-tabs">
+              <button type="button" className={settingsTab === 'password' ? 'active' : ''} onClick={() => setSettingsTab('password')}>Password</button>
+              <button type="button" className={settingsTab === 'email' ? 'active' : ''} onClick={() => setSettingsTab('email')}>Email</button>
+            </div>
+
+            {settingsTab === 'password' && (
+              <form onSubmit={handleChangePassword}>
+                {cpError && <div className="alert error">{cpError}</div>}
+                {cpSuccess && <div className="alert success">{cpSuccess}</div>}
+                <div className="field" style={{ marginBottom: 12 }}>
+                  <label>Current Password</label>
+                  <input type="password" value={cpCurrent} onChange={e => setCpCurrent(e.target.value)} required autoComplete="current-password" placeholder="Current password" />
+                </div>
+                <div className="field" style={{ marginBottom: 12 }}>
+                  <label>New Password</label>
+                  <input type="password" value={cpNew} onChange={e => setCpNew(e.target.value)} required autoComplete="new-password" placeholder="New password" />
+                </div>
+                <div className="field" style={{ marginBottom: 20 }}>
+                  <label>Confirm New Password</label>
+                  <input type="password" value={cpConfirm} onChange={e => setCpConfirm(e.target.value)} required autoComplete="new-password" placeholder="Confirm new password" />
+                </div>
+                <button type="submit" className="primary-action" disabled={cpLoading}>
+                  {cpLoading ? 'Updating…' : 'Update Password'}
+                </button>
+              </form>
+            )}
+
+            {settingsTab === 'email' && (
+              <>
+                <p style={{ color: '#8ea5d9', fontSize: '0.88rem', marginBottom: 16 }}>
+                  Current email: <strong style={{ color: '#f4fbff' }}>{user.email}</strong>
+                </p>
+                {ceError && <div className="alert error">{ceError}</div>}
+                {ceSuccess && <div className="alert success">{ceSuccess}</div>}
+
+                {ceStep === 'request' ? (
+                  <form onSubmit={handleRequestEmailChange}>
+                    <div className="field" style={{ marginBottom: 20 }}>
+                      <label>New Email Address</label>
+                      <input type="email" value={ceNewEmail} onChange={e => setCeNewEmail(e.target.value)} required autoComplete="email" placeholder="new@example.com" />
+                    </div>
+                    <button type="submit" className="primary-action" disabled={ceLoading}>
+                      {ceLoading ? 'Sending…' : 'Send Confirmation Code'}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleConfirmEmailChange}>
+                    <p style={{ color: '#8ea5d9', fontSize: '0.88rem', marginBottom: 16 }}>
+                      A code was sent to <strong style={{ color: '#f4fbff' }}>{ceNewEmail}</strong>.
+                    </p>
+                    <div className="field" style={{ marginBottom: 20 }}>
+                      <label>Confirmation Code</label>
+                      <input type="text" value={ceCode} onChange={e => setCeCode(e.target.value)} required inputMode="numeric" autoComplete="one-time-code" placeholder="123456" />
+                    </div>
+                    <button type="submit" className="primary-action" disabled={ceLoading}>
+                      {ceLoading ? 'Confirming…' : 'Confirm Email Change'}
+                    </button>
+                    <button type="button" className="secondary-action" disabled={ceLoading} onClick={sendEmailChangeCode} style={{ marginTop: 12, width: '100%' }}>
+                      Resend Code
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Close profile menu on outside click */}
+      {profileMenuOpen && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setProfileMenuOpen(false)} />
       )}
     </div>
   );

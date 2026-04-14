@@ -62,6 +62,8 @@
   box-shadow: 0 30px 60px rgba(4, 8, 20, 0.65);
   backdrop-filter: blur(20px);
   margin-bottom: 28px;
+  position: relative;
+  z-index: 150;
 }
 
 .nav-brand {
@@ -106,6 +108,51 @@
   color: #fff;
   font-size: 0.85rem;
   letter-spacing: 0.05em;
+}
+
+.profile-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 5px;
+  border-radius: 12px;
+  border: 1px solid rgba(62, 120, 208, 0.55);
+  background: rgba(18, 38, 92, 0.5);
+  cursor: pointer;
+  color: #c4d4f0;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.profile-trigger:hover,
+.profile-trigger.open {
+  background: rgba(29, 100, 210, 0.25);
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.1);
+}
+
+.profile-initials {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #1a4a9e, #3b6fd4);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: #fff;
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.profile-settings-icon {
+  opacity: 0.7;
+  transition: opacity 0.15s, transform 0.3s;
+}
+
+.profile-trigger:hover .profile-settings-icon,
+.profile-trigger.open .profile-settings-icon {
+  opacity: 1;
+  transform: rotate(45deg);
 }
 
 .nav-brand h1 {
@@ -156,6 +203,111 @@
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* ── Profile dropdown ─────────────────────────────────────────────────────── */
+
+.profile-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 220px;
+  background: rgba(5, 10, 28, 0.97);
+  border: 1px solid rgba(39, 71, 131, 0.7);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(2, 6, 24, 0.8);
+  backdrop-filter: blur(20px);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.profile-dropdown-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(39, 71, 131, 0.4);
+}
+
+.profile-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 11px 16px;
+  color: #c4d4f0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.profile-dropdown button:hover {
+  background: rgba(29, 157, 255, 0.12);
+  color: #f4fbff;
+}
+
+.profile-dropdown-divider {
+  height: 1px;
+  background: rgba(39, 71, 131, 0.4);
+  margin: 4px 0;
+}
+
+/* ── Settings modal ───────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 5, 18, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 200;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 28px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.modal-close {
+  font-size: 1rem;
+  padding: 4px 8px;
+  color: #7c91c1;
+}
+
+.modal-tabs {
+  display: flex;
+  background: rgba(9, 15, 36, 0.6);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 24px;
+  gap: 4px;
+}
+
+.modal-tabs button {
+  flex: 1;
+  padding: 9px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #7c91c1;
+  font-size: 0.88rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.modal-tabs button.active {
+  background: rgba(29, 157, 255, 0.2);
+  color: #22d3ee;
 }
 
 .nav-pill {

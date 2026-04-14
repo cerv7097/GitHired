@@ -57,6 +57,10 @@ function Root() {
     setAuth(null)
   }
 
+  function handleUserUpdate(updated: User) {
+    setAuth(prev => prev ? { ...prev, user: updated } : prev)
+  }
+
   if (checking) {
     return (
       <div className="auth-shell">
@@ -71,7 +75,7 @@ function Root() {
     return <Login onLogin={handleLogin} />
   }
 
-  return <App user={auth.user} onLogout={handleLogout} />
+  return <App user={auth.user} onLogout={handleLogout} onUserUpdate={handleUserUpdate} />
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -876,6 +876,149 @@ app.MapGet("/api/auth/me", async (
     return Results.Ok(new { user.Id, user.Email, user.FirstName, user.LastName, user.EmailVerified });
 });
 
+app.MapPost("/api/auth/forgot-password", async (
+    [FromServices] AuthService auth,
+    [FromBody] ForgotPasswordRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email))
+        return Results.BadRequest(new { error = "Email is required." });
+
+    try
+    {
+        await auth.RequestPasswordResetAsync(req.Email);
+        // Always return success to avoid revealing whether the email exists
+        return Results.Ok(new { message = "If that email is registered, a reset code has been sent." });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Forgot password failed: {ex.Message}");
+        return Results.Ok(new { message = "If that email is registered, a reset code has been sent." });
+    }
+});
+
+app.MapPost("/api/auth/reset-password", async (
+    [FromServices] AuthService auth,
+    [FromBody] ResetPasswordRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Code) || string.IsNullOrWhiteSpace(req.NewPassword))
+        return Results.BadRequest(new { error = "Email, code, and new password are required." });
+
+    try
+    {
+        await auth.ResetPasswordAsync(req.Email, req.Code.Trim(), req.NewPassword);
+        return Results.Ok(new { message = "Password reset successfully. You can now sign in." });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Reset password failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Password reset error");
+    }
+});
+
+app.MapPost("/api/auth/change-password", async (
+    [FromServices] AuthService auth,
+    [FromBody] ChangePasswordRequest req,
+    HttpContext ctx) =>
+{
+    var header = ctx.Request.Headers.Authorization.FirstOrDefault();
+    if (header == null || !header.StartsWith("Bearer "))
+        return Results.Unauthorized();
+
+    var token = header["Bearer ".Length..];
+    var user = await auth.ValidateTokenAsync(token);
+    if (user == null) return Results.Unauthorized();
+
+    if (string.IsNullOrWhiteSpace(req.CurrentPassword) || string.IsNullOrWhiteSpace(req.NewPassword))
+        return Results.BadRequest(new { error = "Current password and new password are required." });
+
+    try
+    {
+        await auth.ChangePasswordAsync(user.Id, req.CurrentPassword, req.NewPassword);
+        return Results.Ok(new { message = "Password updated successfully." });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Change password failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Change password error");
+    }
+});
+
+app.MapPost("/api/auth/request-email-change", async (
+    [FromServices] AuthService auth,
+    [FromBody] RequestEmailChangeRequest req,
+    HttpContext ctx) =>
+{
+    var header = ctx.Request.Headers.Authorization.FirstOrDefault();
+    if (header == null || !header.StartsWith("Bearer "))
+        return Results.Unauthorized();
+
+    var token = header["Bearer ".Length..];
+    var user = await auth.ValidateTokenAsync(token);
+    if (user == null) return Results.Unauthorized();
+
+    if (string.IsNullOrWhiteSpace(req.NewEmail))
+        return Results.BadRequest(new { error = "New email is required." });
+
+    try
+    {
+        await auth.RequestEmailChangeAsync(user.Id, req.NewEmail, user.FirstName);
+        return Results.Ok(new { message = "Confirmation code sent to your new email address." });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Request email change failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Email change error");
+    }
+});
+
+app.MapPost("/api/auth/confirm-email-change", async (
+    [FromServices] AuthService auth,
+    [FromBody] ConfirmEmailChangeRequest req,
+    HttpContext ctx) =>
+{
+    var header = ctx.Request.Headers.Authorization.FirstOrDefault();
+    if (header == null || !header.StartsWith("Bearer "))
+        return Results.Unauthorized();
+
+    var token = header["Bearer ".Length..];
+    var user = await auth.ValidateTokenAsync(token);
+    if (user == null) return Results.Unauthorized();
+
+    if (string.IsNullOrWhiteSpace(req.Code))
+        return Results.BadRequest(new { error = "Confirmation code is required." });
+
+    try
+    {
+        var newEmail = await auth.ConfirmEmailChangeAsync(user.Id, req.Code.Trim());
+        return Results.Ok(new { message = "Email updated successfully.", newEmail });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERROR] Confirm email change failed: {ex.Message}");
+        return Results.Problem(detail: ex.Message, statusCode: 500, title: "Email change confirmation error");
+    }
+});
+
 app.Run();
 
 record Analyze(string userId, string resumeText);
@@ -884,3 +1027,8 @@ record RegisterRequest(string Email, string Password, string FirstName, string L
 record VerifyEmailRequest(string Email, string Code);
 record ResendVerificationRequest(string Email);
 record LoginRequest(string Email, string Password);
+record ForgotPasswordRequest(string Email);
+record ResetPasswordRequest(string Email, string Code, string NewPassword);
+record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+record RequestEmailChangeRequest(string NewEmail);
+record ConfirmEmailChangeRequest(string Code);
