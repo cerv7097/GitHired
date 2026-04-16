@@ -83,43 +83,88 @@ public class RecommendJobsTool : AgentTool
 
             var isRemote = location?.Equals("remote", StringComparison.OrdinalIgnoreCase) == true;
             var profileTerms = BuildProfileTerms(profile);
+            var cacheLocation = RecommendationCache.NormalizeLocation(location);
+            if (RecommendationCache.TryGetFreshDashboardPayload(
+                profile.RecommendedJobs,
+                cacheLocation,
+                profile.UpdatedAt,
+                out var cachedPayload))
+            {
+                return RecommendationCache.ToToolPayload(cachedPayload);
+            }
+
+            var seniority = SeniorityMatcher.InferUserLevel(profile);
+            var normalizedExperienceLevel = SeniorityMatcher.ToLabel(seniority.Level);
 
             var result = await _aggregator.SearchAllAsync(
                 query,
                 location: isRemote ? null : location,
                 remoteOnly: isRemote,
-                experienceLevel: profile.ExperienceLevel,
+                experienceLevel: normalizedExperienceLevel,
                 museCategory: "Technology"
             );
 
-            return JsonSerializer.Serialize(new
+            var matchedJobs = result.Jobs
+                .Select(job => new { Job = job, Seniority = SeniorityMatcher.AssessJob(job, seniority.Level) })
+                .Where(match => match.Seniority.IsCompatible && IsRelevantTechJob(match.Job, profileTerms))
+                .OrderByDescending(match => match.Seniority.CompatibilityScore)
+                .ToList();
+
+            var generatedAt = DateTime.UtcNow;
+            var dashboardPayload = new
             {
-                found = true,
-                matched_on = new
+                cache = new
                 {
-                    role = topRole,
-                    skills = topSkills,
-                    experience_level = profile.ExperienceLevel ?? "not specified"
+                    generatedAt = generatedAt.ToString("O"),
+                    expiresAt = generatedAt.AddDays(RecommendationCache.MaxAgeDays).ToString("O"),
+                    location = cacheLocation,
+                    maxAgeDays = RecommendationCache.MaxAgeDays
                 },
-                total_results = result.Jobs.Count(j => IsRelevantTechJob(j, profileTerms)),
-                jobs = result.Jobs
-                .Where(j => IsRelevantTechJob(j, profileTerms))
-                .Take(5)
-                .Select(j => new
+                matchedOn = new
                 {
-                    title = j.Title,
-                    company = j.Company,
-                    location = j.Location,
-                    is_remote = j.IsRemote,
-                    employment_type = j.EmploymentType,
-                    salary = j.MinSalary != null && j.MaxSalary != null
-                        ? $"{j.SalaryCurrency} {j.MinSalary}–{j.MaxSalary}/{j.SalaryPeriod}"
-                        : "Not specified",
-                    description_snippet = j.DescriptionSnippet,
-                    apply_link = j.ApplyLink,
-                    posted_at = j.PostedAt
-                })
-            });
+                    roles = profile.Roles.Take(3),
+                    skills = topSkills,
+                    experienceLevel = normalizedExperienceLevel,
+                    experienceLevelUncertain = seniority.IsUncertain,
+                    experienceLevelReason = seniority.Reason,
+                    atsScore = profile.AtsScore,
+                    searchQueries = new[] { query }
+                },
+                totalResults = matchedJobs.Count,
+                jobs = matchedJobs
+                    .Take(5)
+                    .Select(match => new
+                    {
+                        title = match.Job.Title,
+                        company = match.Job.Company,
+                        logoUrl = match.Job.LogoUrl,
+                        location = match.Job.Location,
+                        isRemote = match.Job.IsRemote,
+                        employmentType = match.Job.EmploymentType,
+                        minSalary = match.Job.MinSalary,
+                        maxSalary = match.Job.MaxSalary,
+                        salaryCurrency = match.Job.SalaryCurrency,
+                        salaryPeriod = match.Job.SalaryPeriod,
+                        descriptionSnippet = match.Job.DescriptionSnippet,
+                        applyLink = match.Job.ApplyLink,
+                        postedAt = match.Job.PostedAt,
+                        seniorityLevel = match.Seniority.Level is null ? "unclear" : SeniorityMatcher.ToLabel(match.Seniority.Level.Value),
+                        seniorityFit = match.Seniority.Reason
+                    })
+                    .ToList()
+            };
+
+            var dashboardJson = JsonSerializer.Serialize(dashboardPayload);
+            try
+            {
+                await _db.SaveRecommendedJobsAsync(userId, dashboardJson);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WARN] Could not cache recommendations for user {userId}: {ex.Message}");
+            }
+
+            return RecommendationCache.ToToolPayload(dashboardJson);
         }
         catch (Exception ex)
         {

@@ -79,6 +79,38 @@ public class CareerCoachAgent
             Content = userMessage
         });
 
+        if (IsRecommendationRequest(userMessage) && !IsResumeAnalysisRequest(userMessage))
+        {
+            var tool = _toolRegistry.GetTool("recommend_jobs");
+            if (tool != null)
+            {
+                var arguments = JsonSerializer.Serialize(new { user_id = userId });
+                var result = await tool.ExecuteAsync(arguments);
+                var finalMessage = FormatRecommendationToolResult(result);
+
+                messages.Add(new ConversationMessage
+                {
+                    Role = "assistant",
+                    Content = finalMessage
+                });
+
+                return new AgentResponse
+                {
+                    Message = finalMessage,
+                    ToolsUsed = new List<ToolExecution>
+                    {
+                        new()
+                        {
+                            ToolName = "recommend_jobs",
+                            Arguments = arguments,
+                            Result = result
+                        }
+                    },
+                    ConversationId = conversationId
+                };
+            }
+        }
+
         // Agent loop: continue until we get a final answer (no tool calls)
         var iterations = 0;
         var toolExecutions = new List<ToolExecution>();
@@ -210,7 +242,7 @@ IMPORTANT BEHAVIOR RULES:
 - Whenever the user asks about jobs, career paths, role alignment, skill gaps, or any personalized career question, ALWAYS call get_user_profile first to retrieve their stored resume data, skills, roles, education, and experience.
 - If the user says anything like ""based on my experience"", ""based on my skills"", ""what roles fit me"", ""what jobs match my profile"", or similar — call get_user_profile immediately before responding.
 - After get_user_profile, use the returned skills, roles, education, and resume_text to give a fully personalized response. Never give generic advice when you have their actual profile data.
-- When recommending jobs, use the recommend_jobs tool which automatically uses their stored profile.
+- When the user asks for recommended roles, recommended jobs, job matches, roles that fit them, or jobs based on their profile, use the recommend_jobs tool. This tool applies the same seniority inference and job-level filtering used by the recommendations API, so do not invent a separate role list from general knowledge.
 - When asked to analyze a resume that is provided in the message, use analyze_ats_compatibility and improve_resume tools.
 
 Your capabilities:
@@ -230,6 +262,114 @@ Guidelines:
 6. When parser diagnostics indicate extraction issues, separate those from genuine resume quality issues
 
 Current user ID: {userId}";
+    }
+
+    private static bool IsRecommendationRequest(string message)
+    {
+        var text = message.ToLowerInvariant();
+        var hasRecommendationLanguage =
+            text.Contains("recommend") ||
+            text.Contains("match") ||
+            text.Contains("fit me") ||
+            text.Contains("for me") ||
+            text.Contains("based on my profile") ||
+            text.Contains("based on my resume") ||
+            text.Contains("based on my experience");
+
+        var hasRoleOrJobLanguage =
+            text.Contains("role") ||
+            text.Contains("job") ||
+            text.Contains("position") ||
+            text.Contains("opening") ||
+            text.Contains("career");
+
+        return hasRecommendationLanguage && hasRoleOrJobLanguage;
+    }
+
+    private static bool IsResumeAnalysisRequest(string message)
+    {
+        var text = message.ToLowerInvariant();
+
+        // Resume uploads append parser diagnostics and raw resume text to the
+        // prompt. Do not scan that full payload as a normal chat request, because
+        // resume content often contains words like "job", "role", "matched", or
+        // "recommend" and can otherwise trigger the job recommendation shortcut.
+        return text.Contains("resume text:") ||
+               text.Contains("parser diagnostics") ||
+               text.Contains("uploaded my resume") ||
+               text.Contains("ats compatibility") ||
+               text.Contains("analyze resume") ||
+               text.Contains("improvement suggestions");
+    }
+
+    private static string FormatRecommendationToolResult(string toolResult)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(toolResult);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("found", out var found) && found.ValueKind == JsonValueKind.False)
+                return root.TryGetProperty("message", out var msg) ? msg.GetString() ?? "Please upload your resume first." : "Please upload your resume first.";
+
+            if (root.TryGetProperty("error", out var error))
+                return error.GetString() ?? "I could not fetch recommendations right now.";
+
+            var matched = root.TryGetProperty("matched_on", out var matchedOn) ? matchedOn : default;
+            var level = GetString(matched, "experience_level", "your inferred level");
+            var reason = GetString(matched, "experience_level_reason", "");
+            var uncertain = matched.ValueKind != JsonValueKind.Undefined &&
+                matched.TryGetProperty("experience_level_uncertain", out var uncertainEl) &&
+                uncertainEl.ValueKind == JsonValueKind.True;
+
+            var lines = new List<string>
+            {
+                uncertain
+                    ? $"I found matches using a conservative {level} seniority fit because your level was uncertain."
+                    : $"I found matches using your inferred {level} seniority fit."
+            };
+
+            if (!string.IsNullOrWhiteSpace(reason))
+                lines.Add($"Seniority signal: {reason}.");
+
+            if (!root.TryGetProperty("jobs", out var jobs) || jobs.ValueKind != JsonValueKind.Array || jobs.GetArrayLength() == 0)
+            {
+                lines.Add("I did not find compatible openings after applying the seniority filter. Try uploading a newer resume or asking for a broader location.");
+                return string.Join("\n\n", lines);
+            }
+
+            lines.Add("Recommended roles:");
+            var index = 1;
+            foreach (var job in jobs.EnumerateArray().Take(5))
+            {
+                var title = GetString(job, "title", "Untitled role");
+                var company = GetString(job, "company", "Unknown company");
+                var location = GetString(job, "location", "");
+                var fit = GetString(job, "seniority_fit", "");
+                var link = GetString(job, "apply_link", "");
+
+                var locationPart = string.IsNullOrWhiteSpace(location) ? "" : $" - {location}";
+                var fitPart = string.IsNullOrWhiteSpace(fit) ? "" : $" ({fit})";
+                var linkPart = string.IsNullOrWhiteSpace(link) ? "" : $"\nApply: {link}";
+                lines.Add($"{index}. {title} at {company}{locationPart}{fitPart}{linkPart}");
+                index++;
+            }
+
+            return string.Join("\n\n", lines);
+        }
+        catch
+        {
+            return "I fetched recommendations, but could not format the result. Please try again.";
+        }
+
+        static string GetString(JsonElement element, string property, string fallback)
+        {
+            return element.ValueKind != JsonValueKind.Undefined &&
+                   element.TryGetProperty(property, out var value) &&
+                   value.ValueKind == JsonValueKind.String
+                ? value.GetString() ?? fallback
+                : fallback;
+        }
     }
 
     /// <summary>

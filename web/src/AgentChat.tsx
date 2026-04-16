@@ -1,4 +1,60 @@
 import { useState } from 'react';
+import React from 'react';
+
+function renderMarkdown(text: string) {
+  const elements: React.ReactNode[] = [];
+  const lines = text.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.startsWith('#### ')) {
+      elements.push(<strong key={i} style={{ display: 'block', margin: '10px 0 2px' }}>{inlineFormat(line.slice(5))}</strong>);
+      i++; continue;
+    }
+    if (line.startsWith('### ')) {
+      elements.push(<h4 key={i} style={{ margin: '12px 0 4px' }}>{inlineFormat(line.slice(4))}</h4>);
+      i++; continue;
+    }
+    if (line.startsWith('## ')) {
+      elements.push(<h3 key={i} style={{ margin: '14px 0 4px' }}>{inlineFormat(line.slice(3))}</h3>);
+      i++; continue;
+    }
+    if (line.startsWith('# ')) {
+      elements.push(<h2 key={i} style={{ margin: '16px 0 6px' }}>{inlineFormat(line.slice(2))}</h2>);
+      i++; continue;
+    }
+
+    if (/^(\s*[-*•]|\d+\.) /.test(line)) {
+      const items: React.ReactNode[] = [];
+      while (i < lines.length && /^(\s*[-*•]|\d+\.) /.test(lines[i])) {
+        const itemText = lines[i].replace(/^(\s*[-*•]|\d+\.) /, '');
+        items.push(<li key={i}>{inlineFormat(itemText)}</li>);
+        i++;
+      }
+      elements.push(<ul key={`ul-${i}`} style={{ margin: '6px 0', paddingLeft: 20 }}>{items}</ul>);
+      continue;
+    }
+
+    if (line.trim() === '') {
+      elements.push(<br key={i} />);
+      i++; continue;
+    }
+
+    elements.push(<p key={i} style={{ margin: '4px 0' }}>{inlineFormat(line)}</p>);
+    i++;
+  }
+
+  return elements;
+}
+
+function inlineFormat(text: string): React.ReactNode {
+  const parts = text.split(/\*\*(.+?)\*\*/g);
+  return parts.map((part, idx) =>
+    idx % 2 === 1 ? <strong key={idx}>{part}</strong> : part
+  );
+}
 
 interface Message {
   role: 'user' | 'assistant';
@@ -129,7 +185,9 @@ export default function AgentChat({ userId }: { userId: string }) {
             <div className="chat-author">
               {msg.role === 'user' ? '👤 You' : '🤖 Career Coach'}
             </div>
-            <div className="chat-content">{msg.content}</div>
+            <div className="chat-content">
+              {msg.role === 'assistant' ? renderMarkdown(msg.content) : msg.content}
+            </div>
 
             {showTools && msg.toolsUsed && msg.toolsUsed.length > 0 && (
               <div className="chat-tools">

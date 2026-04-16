@@ -374,6 +374,9 @@ app.MapPost("/api/resume/upload", async (
             var pRoles  = ExtractArr(pr, "roles");
             var pExpLevel = pr.TryGetProperty("experience_level", out var expEl) && expEl.ValueKind == JsonValueKind.String
                 ? expEl.GetString() : null;
+            pExpLevel = SeniorityMatcher.Normalize(pExpLevel) is { } normalizedExtractedLevel
+                ? SeniorityMatcher.ToLabel(normalizedExtractedLevel)
+                : null;
             var pSummary = pr.TryGetProperty("summary", out var sumEl) && sumEl.ValueKind == JsonValueKind.String
                 ? sumEl.GetString() : null;
             var pEducation = pr.TryGetProperty("education", out var eduEl)
@@ -539,6 +542,19 @@ app.MapGet("/api/jobs/recommended", async (
 
     var isRemote = location?.Equals("remote", StringComparison.OrdinalIgnoreCase) == true;
     var searchLocation = isRemote ? null : location?.Trim();
+    var cacheLocation = RecommendationCache.NormalizeLocation(location);
+    var cachedRecommendations = await db.GetRecommendedJobsAsync(userId);
+    if (RecommendationCache.TryGetFreshDashboardPayload(
+        cachedRecommendations,
+        cacheLocation,
+        profile.UpdatedAt,
+        out var cachedPayload))
+    {
+        return Results.Content(cachedPayload, "application/json");
+    }
+
+    var seniority = SeniorityMatcher.InferUserLevel(profile);
+    var normalizedExperienceLevel = SeniorityMatcher.ToLabel(seniority.Level);
 
     // Use LLM to generate 2 targeted, diverse search queries from the user's profile
     var queries = new List<string>();
@@ -551,7 +567,8 @@ app.MapGet("/api/jobs/recommended", async (
                 $"Roles: {string.Join(", ", profile.Roles.Take(3))}\n" +
                 $"Skills: {string.Join(", ", profile.Skills.Take(8))}\n" +
                 $"Tools: {string.Join(", ", profile.Tools.Take(5))}\n" +
-                $"Experience level: {profile.ExperienceLevel ?? "not specified"}";
+                $"Inferred experience level: {normalizedExperienceLevel}\n" +
+                $"Seniority evidence: {seniority.Reason}";
         }
         else if (!string.IsNullOrWhiteSpace(profile.ResumeText))
         {
@@ -569,6 +586,8 @@ app.MapGet("/api/jobs/recommended", async (
             "job search query strings suitable for a job board (like Indeed or LinkedIn). " +
             "Each query must be a specific tech or software job title — examples: \"Senior React Developer\", " +
             "\"Data Engineer Python AWS\", \"DevOps Engineer Kubernetes\". " +
+            $"Do not generate queries above this candidate's inferred level: {normalizedExperienceLevel}. " +
+            "For entry-level candidates, prefer junior, associate, new grad, internship, or plain role titles and avoid senior, lead, staff, principal, manager, and director titles. " +
             "Never generate queries for non-tech roles (e.g. sales, marketing, HR, retail, nursing). " +
             "If the profile is unclear, default to software engineering roles. " +
             "Return ONLY a JSON array of exactly 2 strings. No commentary, no markdown fences.";
@@ -649,19 +668,20 @@ app.MapGet("/api/jobs/recommended", async (
 
     // Run all queries and aggregate results
     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-    var allJobs = new List<object>();
+    var allJobs = new List<(int Score, object Job)>();
 
     foreach (var q in queries)
     {
         try
         {
-            var result = await aggregator.SearchAllAsync(q, searchLocation, isRemote, profile.ExperienceLevel, museCategory: "Technology");
+            var result = await aggregator.SearchAllAsync(q, searchLocation, isRemote, normalizedExperienceLevel, museCategory: "Technology");
             foreach (var j in result.Jobs)
             {
                 var key = $"{j.Company}|{j.Title}";
-                if (IsRelevantTechJob(j) && seen.Add(key))
+                var jobSeniority = SeniorityMatcher.AssessJob(j, seniority.Level);
+                if (IsRelevantTechJob(j) && jobSeniority.IsCompatible && seen.Add(key))
                 {
-                    allJobs.Add(new
+                    allJobs.Add((jobSeniority.CompatibilityScore, new
                     {
                         title = j.Title,
                         company = j.Company,
@@ -675,8 +695,10 @@ app.MapGet("/api/jobs/recommended", async (
                         salaryPeriod = j.SalaryPeriod,
                         descriptionSnippet = j.DescriptionSnippet,
                         applyLink = j.ApplyLink,
-                        postedAt = j.PostedAt
-                    });
+                        postedAt = j.PostedAt,
+                        seniorityLevel = jobSeniority.Level is null ? "unclear" : SeniorityMatcher.ToLabel(jobSeniority.Level.Value),
+                        seniorityFit = jobSeniority.Reason
+                    }));
                 }
             }
         }
@@ -686,7 +708,9 @@ app.MapGet("/api/jobs/recommended", async (
         }
     }
 
-    // If fewer than 3 results, run a broader fallback search
+    // If fewer than 3 results, run a broader fallback search. The same seniority
+    // gate still applies, so broadening the query cannot reintroduce senior roles
+    // for entry-level or uncertain profiles.
     if (allJobs.Count < 3)
     {
         try
@@ -695,13 +719,14 @@ app.MapGet("/api/jobs/recommended", async (
             if (!HasTechTitleKeyword(fallbackQuery) || !MatchesProfile(fallbackQuery, ""))
                 fallbackQuery = profile.Skills.FirstOrDefault(s => HasTechTitleKeyword(s)) ?? "software engineer";
 
-            var fallback = await aggregator.SearchAllAsync(fallbackQuery, searchLocation, isRemote, profile.ExperienceLevel, museCategory: "Technology");
+            var fallback = await aggregator.SearchAllAsync(fallbackQuery, searchLocation, isRemote, normalizedExperienceLevel, museCategory: "Technology");
             foreach (var j in fallback.Jobs)
             {
                 var key = $"{j.Company}|{j.Title}";
-                if (IsRelevantTechJob(j) && seen.Add(key))
+                var jobSeniority = SeniorityMatcher.AssessJob(j, seniority.Level);
+                if (IsRelevantTechJob(j) && jobSeniority.IsCompatible && seen.Add(key))
                 {
-                    allJobs.Add(new
+                    allJobs.Add((jobSeniority.CompatibilityScore, new
                     {
                         title = j.Title,
                         company = j.Company,
@@ -715,8 +740,10 @@ app.MapGet("/api/jobs/recommended", async (
                         salaryPeriod = j.SalaryPeriod,
                         descriptionSnippet = j.DescriptionSnippet,
                         applyLink = j.ApplyLink,
-                        postedAt = j.PostedAt
-                    });
+                        postedAt = j.PostedAt,
+                        seniorityLevel = jobSeniority.Level is null ? "unclear" : SeniorityMatcher.ToLabel(jobSeniority.Level.Value),
+                        seniorityFit = jobSeniority.Reason
+                    }));
                 }
             }
         }
@@ -726,19 +753,43 @@ app.MapGet("/api/jobs/recommended", async (
         }
     }
 
-    return Results.Ok(new
+    var generatedAt = DateTime.UtcNow;
+    var responsePayload = new
     {
+        cache = new
+        {
+            generatedAt = generatedAt.ToString("O"),
+            expiresAt = generatedAt.AddDays(RecommendationCache.MaxAgeDays).ToString("O"),
+            location = cacheLocation,
+            maxAgeDays = RecommendationCache.MaxAgeDays
+        },
         matchedOn = new
         {
             roles = profile.Roles.Take(3),
             skills = profile.Skills.Take(5),
-            experienceLevel = profile.ExperienceLevel ?? "not specified",
+            experienceLevel = normalizedExperienceLevel,
+            experienceLevelUncertain = seniority.IsUncertain,
+            experienceLevelReason = seniority.Reason,
             atsScore = profile.AtsScore,
             searchQueries = queries
         },
         totalResults = allJobs.Count,
         jobs = allJobs
-    });
+            .OrderByDescending(j => j.Score)
+            .Select(j => j.Job)
+            .ToList()
+    };
+
+    try
+    {
+        await db.SaveRecommendedJobsAsync(userId, JsonSerializer.Serialize(responsePayload));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[WARN] Could not cache recommendations for user {userId}: {ex.Message}");
+    }
+
+    return Results.Ok(responsePayload);
 });
 
 // ── Auth endpoints ──────────────────────────────────────────────────────────

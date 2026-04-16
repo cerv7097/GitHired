@@ -43,7 +43,8 @@ public record UserProfileRecord(
     string LastName,
     string Email,
     string? ResumeText,
-    string Education  // raw JSONB string: [{"degree":"...","institution":"...","year":"..."}]
+    string Education,  // raw JSONB string: [{"degree":"...","institution":"...","year":"..."}]
+    string RecommendedJobs // raw JSONB string with cached recommendation payload and metadata
 );
 
 public class Db {
@@ -293,6 +294,7 @@ public class Db {
     var migrate = """
       ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resume_text TEXT;
       ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS education JSONB NOT NULL DEFAULT '[]';
+      ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS recommended_jobs JSONB NOT NULL DEFAULT '{}';
       """;
     await using var migrate_cmd = new NpgsqlCommand(migrate, con);
     await migrate_cmd.ExecuteNonQueryAsync();
@@ -379,7 +381,8 @@ public class Db {
       SELECT p.skills, p.tools, p.roles, p.experience_level, p.summary, p.ats_score,
              p.assessment_scores, p.search_history, p.updated_at,
              u.first_name, u.last_name, u.email,
-             p.resume_text, COALESCE(p.education::text, '[]')
+             p.resume_text, COALESCE(p.education::text, '[]'),
+             COALESCE(p.recommended_jobs::text, '{}')
       FROM user_profiles p
       JOIN users u ON u.id = p.user_id
       WHERE p.user_id = @uid
@@ -404,8 +407,40 @@ public class Db {
       LastName: reader.GetString(10),
       Email: reader.GetString(11),
       ResumeText: reader.IsDBNull(12) ? null : reader.GetString(12),
-      Education: reader.GetString(13)
+      Education: reader.GetString(13),
+      RecommendedJobs: reader.GetString(14)
     );
+  }
+
+  public async Task<string?> GetRecommendedJobsAsync(string userId)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      SELECT COALESCE(recommended_jobs::text, '{}')
+      FROM user_profiles
+      WHERE user_id = @uid
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    var value = await cmd.ExecuteScalarAsync();
+    return value as string;
+  }
+
+  public async Task SaveRecommendedJobsAsync(string userId, string recommendationsJson)
+  {
+    await using var con = new NpgsqlConnection(_cs);
+    await con.OpenAsync();
+    var sql = """
+      INSERT INTO user_profiles (user_id, skills, tools, roles, recommended_jobs)
+      VALUES (@uid, '{}', '{}', '{}', @recommendations::jsonb)
+      ON CONFLICT (user_id) DO UPDATE SET
+        recommended_jobs = EXCLUDED.recommended_jobs;
+      """;
+    await using var cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("uid", userId);
+    cmd.Parameters.Add(new NpgsqlParameter("recommendations", NpgsqlDbType.Jsonb) { Value = recommendationsJson });
+    await cmd.ExecuteNonQueryAsync();
   }
 
   public async Task SaveAssessmentScoreAsync(string userId, string role, int score)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import AgentChat from './AgentChat';
 import Assessment from './Assessment';
 import Jobs from './Jobs';
@@ -946,7 +946,7 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
     }
   ];
 
-  function fetchRecommendations() {
+  const fetchRecommendations = useCallback(() => {
     setRecsLoading(true);
     fetch(`${API_BASE}/api/jobs/recommended?userId=${encodeURIComponent(user.id)}`)
       .then(res => {
@@ -966,7 +966,7 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
       })
       .catch(() => { /* silently show empty state */ })
       .finally(() => setRecsLoading(false));
-  }
+  }, [user.id]);
 
   useEffect(() => {
     setRecommendations([]);
@@ -974,6 +974,10 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
     setRecsTotalResults(0);
     setRecsLoading(false);
   }, [user.id]);
+
+  useEffect(() => {
+    fetchRecommendations();
+  }, [fetchRecommendations]);
 
   const handleResumeUploadStart = () => {
     setRecommendations([]);
