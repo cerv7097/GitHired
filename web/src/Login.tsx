@@ -222,6 +222,16 @@ export default function Login({ onLogin }: Props) {
 
   return (
     <div className="auth-shell">
+      <div className="auth-ambient auth-ambient-left" aria-hidden="true">
+        <span>Build stronger resumes</span>
+        <span>with intelligent guidance</span>
+      </div>
+
+      <div className="auth-ambient auth-ambient-right" aria-hidden="true">
+        <span>Discover better opportunities</span>
+        <span>tailored to your future</span>
+      </div>
+
       <div className="auth-card card">
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <img src="/Nextwavelogo.png" alt="NextWave Insights" style={{ width: 160, height: 160, margin: '0 auto 16px', display: 'block', objectFit: 'contain', filter: 'brightness(0) invert(1)' }} />
