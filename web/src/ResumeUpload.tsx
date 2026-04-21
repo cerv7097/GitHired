@@ -251,7 +251,7 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, on
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.docx"
+          accept=".pdf,.docx,.doc,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
           onChange={handleFileChange}
           style={{ display: 'none' }}
         />
@@ -264,7 +264,7 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, on
         ) : (
           <div className="file-meta">
             <strong>Drag & drop your resume here</strong>
-            <span>or click to browse (PDF or DOCX)</span>
+            <span>or click to browse (PDF, DOCX, or DOC)</span>
           </div>
         )}
       </div>

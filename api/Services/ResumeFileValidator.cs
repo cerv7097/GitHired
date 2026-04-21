@@ -13,7 +13,8 @@ public static class ResumeFileValidator
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".pdf",
-        ".docx"
+        ".docx",
+        ".doc"
     };
 
     private static readonly Dictionary<string, string> MimeToExtension = new(StringComparer.OrdinalIgnoreCase)
@@ -24,7 +25,10 @@ public static class ResumeFileValidator
         ["applications/pdf"] = ".pdf",
         ["text/pdf"] = ".pdf",
         ["text/x-pdf"] = ".pdf",
-        ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = ".docx"
+        ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = ".docx",
+        ["application/msword"] = ".doc",
+        ["application/vnd.ms-word"] = ".doc",
+        ["application/x-msword"] = ".doc"
     };
 
     public static bool TryNormalizeFileMetadata(
@@ -40,7 +44,7 @@ public static class ResumeFileValidator
         if (extension == null)
         {
             var reported = GetReportedType(file);
-            errorMessage = $"Unsupported file type ({reported}). Please upload a PDF or DOCX resume.";
+            errorMessage = $"Unsupported file type ({reported}). Please upload a PDF, DOCX, or DOC resume.";
             return false;
         }
 
@@ -111,6 +115,12 @@ public static class ResumeFileValidator
             if (header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04)
             {
                 return ".docx";
+            }
+
+            // Legacy .doc files are OLE compound documents.
+            if (header[0] == 0xD0 && header[1] == 0xCF && header[2] == 0x11 && header[3] == 0xE0)
+            {
+                return ".doc";
             }
         }
 

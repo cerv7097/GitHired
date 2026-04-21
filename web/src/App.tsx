@@ -1072,6 +1072,16 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
       {activeTab === 'dashboard' ? (
         <>
           <section className="dashboard-hero">
+            <video
+              className="hero-bg-video"
+              autoPlay
+              loop
+              muted
+              playsInline
+              aria-hidden="true"
+            >
+              <source src="/Video_Generation_Request_Fulfilled.mp4" type="video/mp4" />
+            </video>
             <div className="hero-text">
               <div className="status-pill">SYSTEM ACTIVE</div>
               <h2>Welcome back, {user.firstName}</h2>

@@ -64,7 +64,8 @@ export default function Login({ onLogin }: Props) {
         return;
       }
       if (!res.ok) {
-        setError('Something went wrong. Please try again.');
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? data.detail ?? data.title ?? 'Something went wrong. Please try again.');
         return;
       }
 

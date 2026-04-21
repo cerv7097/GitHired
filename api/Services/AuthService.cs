@@ -51,8 +51,13 @@ public class AuthService
         if (!row.EmailVerified)
         {
             var unverifiedUser = new UserRecord(row.Id, email.ToLowerInvariant(), row.FirstName, row.LastName, false);
-            await SendVerificationCodeAsync(unverifiedUser);
-            throw new InvalidOperationException("Email address has not been verified. A new verification code was sent.");
+            var verificationResent = await TrySendVerificationCodeAsync(unverifiedUser);
+            if (verificationResent)
+                throw new InvalidOperationException("Email address has not been verified. A new verification code was sent.");
+
+            throw new InvalidOperationException(
+                "Email address has not been verified. We could not resend a code right now. Please try 'Resend code' shortly."
+            );
         }
 
         var user = new UserRecord(row.Id, email.ToLowerInvariant(), row.FirstName, row.LastName, row.EmailVerified);
@@ -203,6 +208,20 @@ public class AuthService
         await _db.SaveEmailVerificationCodeAsync(user.Id, codeHash, expiresAt);
         await _emailSender.SendVerificationCodeAsync(user.Email, user.FirstName, code, expiresAt);
         _logger.LogInformation("Issued email verification code for user {UserId}", user.Id);
+    }
+
+    private async Task<bool> TrySendVerificationCodeAsync(UserRecord user)
+    {
+        try
+        {
+            await SendVerificationCodeAsync(user);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send verification code for user {UserId}", user.Id);
+            return false;
+        }
     }
 
     private static string GenerateVerificationCode()

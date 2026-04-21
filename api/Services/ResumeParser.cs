@@ -1,5 +1,6 @@
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using DocumentFormat.OpenXml;
 using iTextSharp.text.pdf;
 using System.Diagnostics;
 using System.Globalization;
@@ -28,8 +29,8 @@ public class ResumeParser
             {
                 ".pdf"  => await ParsePdfAsync(fileStream),
                 ".docx" => await ParseDocxAsync(fileStream),
-                ".doc"  => throw new NotSupportedException("Legacy .doc format is not supported. Please convert to .docx"),
-                _       => throw new NotSupportedException($"File type '{extension}' is not supported. Please upload PDF or DOCX.")
+                ".doc"  => await ParseLegacyDocAsync(fileStream, fileName),
+                _       => throw new NotSupportedException($"File type '{extension}' is not supported. Please upload PDF, DOCX, or DOC.")
             };
 
             return new ResumeParseResult
@@ -56,76 +57,331 @@ public class ResumeParser
 
     private async Task<string> ParsePdfAsync(Stream stream)
     {
+        var candidates = new List<(string Source, string Text)>();
+
         stream.Position = 0;
         if (OperatingSystem.IsMacOS())
         {
             var nativeText = await TryExtractPdfTextWithPdfKitAsync(stream);
-            if (!string.IsNullOrWhiteSpace(nativeText) && CountWords(nativeText) >= 40)
-                return nativeText;
+            if (!string.IsNullOrWhiteSpace(nativeText))
+                candidates.Add(("pdfkit", nativeText));
         }
 
         stream.Position = 0;
         var text = new StringBuilder();
-        using var document = UglyToad.PdfPig.PdfDocument.Open(stream);
-        foreach (var page in document.GetPages())
+        using (var document = UglyToad.PdfPig.PdfDocument.Open(stream))
         {
-            var pageText = page.Text;
-            if (!string.IsNullOrWhiteSpace(pageText))
-                text.AppendLine(pageText);
+            foreach (var page in document.GetPages())
+            {
+                var pageText = page.Text;
+                if (!string.IsNullOrWhiteSpace(pageText))
+                    text.AppendLine(pageText);
+            }
         }
 
         var extracted = CleanupExtractedText(text.ToString());
-        if (!string.IsNullOrWhiteSpace(extracted) && CountWords(extracted) >= 20)
-            return extracted;
+        if (!string.IsNullOrWhiteSpace(extracted))
+            candidates.Add(("pdfpig", extracted));
 
         stream.Position = 0;
         var fallbackText = new StringBuilder();
-        using var fallbackReader = new PdfReader(stream);
-        for (var page = 1; page <= fallbackReader.NumberOfPages; page++)
+        using (var fallbackReader = new PdfReader(stream))
         {
-            var pageBytes = fallbackReader.GetPageContent(page);
-            if (pageBytes != null)
-                fallbackText.AppendLine(ExtractTextFromPdfContent(pageBytes));
+            for (var page = 1; page <= fallbackReader.NumberOfPages; page++)
+            {
+                var pageBytes = fallbackReader.GetPageContent(page);
+                if (pageBytes != null)
+                    fallbackText.AppendLine(ExtractTextFromPdfContent(pageBytes));
+            }
         }
-        return CleanupExtractedText(fallbackText.ToString());
+
+        var fallback = CleanupExtractedText(fallbackText.ToString());
+        if (!string.IsNullOrWhiteSpace(fallback))
+            candidates.Add(("itext-fallback", fallback));
+
+        if (candidates.Count == 0)
+            return string.Empty;
+
+        foreach (var candidate in candidates)
+        {
+            Console.WriteLine($"[PDF_PARSE] source={candidate.Source} words={CountWords(candidate.Text)} chars={candidate.Text.Length}");
+        }
+
+        var selected = SelectBestPdfExtraction(candidates);
+        Console.WriteLine($"[PDF_PARSE] selected={selected.Source} words={CountWords(selected.Text)} chars={selected.Text.Length}");
+        return selected.Text;
     }
 
     private Task<string> ParseDocxAsync(Stream stream)
     {
         return Task.Run(() =>
         {
+            stream.Position = 0;
             var text = new StringBuilder();
             using var doc = WordprocessingDocument.Open(stream, false);
             var body = doc.MainDocumentPart?.Document?.Body
                 ?? throw new InvalidOperationException("Document body is empty or invalid");
 
-            foreach (var element in body.Elements())
+            AppendOpenXmlText(body, text);
+
+            if (doc.MainDocumentPart != null)
             {
-                if (element is Table table)
-                {
-                    foreach (var row in table.Elements<TableRow>())
-                    {
-                        var cellTexts = row.Elements<TableCell>()
-                            .Select(cell => string.Join(" ",
-                                cell.Descendants<Paragraph>().Select(p => p.InnerText.Trim())).Trim())
-                            .Where(t => t.Length > 0);
-                        var rowText = string.Join("  ", cellTexts).Trim();
-                        if (rowText.Length > 0)
-                            text.AppendLine(rowText);
-                    }
-                }
-                else
-                {
-                    foreach (var paragraph in element.Descendants<Paragraph>())
-                    {
-                        var line = paragraph.InnerText.Trim();
-                        if (line.Length > 0)
-                            text.AppendLine(line);
-                    }
-                }
+                foreach (var header in doc.MainDocumentPart.HeaderParts)
+                    AppendOpenXmlText(header.Header, text);
+                foreach (var footer in doc.MainDocumentPart.FooterParts)
+                    AppendOpenXmlText(footer.Footer, text);
+                if (doc.MainDocumentPart.FootnotesPart?.Footnotes != null)
+                    AppendOpenXmlText(doc.MainDocumentPart.FootnotesPart.Footnotes, text);
+                if (doc.MainDocumentPart.EndnotesPart?.Endnotes != null)
+                    AppendOpenXmlText(doc.MainDocumentPart.EndnotesPart.Endnotes, text);
             }
+
             return CleanupExtractedText(text.ToString());
         });
+    }
+
+    private async Task<string> ParseLegacyDocAsync(Stream stream, string fileName)
+    {
+        var converted = await TryConvertLegacyDocWithTextUtilAsync(stream, fileName);
+        if (!string.IsNullOrWhiteSpace(converted))
+            return converted;
+
+        stream.Position = 0;
+        converted = await TryConvertLegacyDocWithLibreOfficeAsync(stream, fileName);
+        if (!string.IsNullOrWhiteSpace(converted))
+            return converted;
+
+        stream.Position = 0;
+        var fallback = ExtractLikelyTextFromLegacyDoc(stream);
+        if (!string.IsNullOrWhiteSpace(fallback) && CountWords(fallback) >= 20)
+            return fallback;
+
+        throw new NotSupportedException("Could not extract text from this legacy .doc file. Please save it as .docx and upload again.");
+    }
+
+    private static void AppendOpenXmlText(OpenXmlElement root, StringBuilder text)
+    {
+        foreach (var table in root.Descendants<Table>())
+        {
+            foreach (var row in table.Elements<TableRow>())
+            {
+                var cellTexts = row.Elements<TableCell>()
+                    .Select(cell => string.Join(" ",
+                        cell.Descendants<Paragraph>().Select(ParagraphText).Where(t => t.Length > 0)).Trim())
+                    .Where(t => t.Length > 0);
+                var rowText = string.Join("  ", cellTexts).Trim();
+                if (rowText.Length > 0)
+                    text.AppendLine(rowText);
+            }
+        }
+
+        foreach (var paragraph in root.Descendants<Paragraph>().Where(p => !p.Ancestors<Table>().Any()))
+        {
+            var line = ParagraphText(paragraph);
+            if (line.Length > 0)
+                text.AppendLine(line);
+        }
+    }
+
+    private static string ParagraphText(Paragraph paragraph)
+    {
+        var text = new StringBuilder();
+        foreach (var child in paragraph.Descendants())
+        {
+            switch (child)
+            {
+                case Text t:
+                    text.Append(t.Text);
+                    break;
+                case TabChar:
+                    text.Append(' ');
+                    break;
+                case Break:
+                    text.AppendLine();
+                    break;
+            }
+        }
+        return Regex.Replace(text.ToString(), @"[ \t]+", " ").Trim();
+    }
+
+    private async Task<string?> TryConvertLegacyDocWithTextUtilAsync(Stream stream, string fileName)
+    {
+        if (!OperatingSystem.IsMacOS())
+            return null;
+
+        var textUtilPath = "/usr/bin/textutil";
+        if (!File.Exists(textUtilPath))
+            return null;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "career-coach-doc", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var docPath = Path.Combine(tempDir, Path.ChangeExtension(Path.GetFileName(fileName), ".doc"));
+        var txtPath = Path.ChangeExtension(docPath, ".txt");
+        try
+        {
+            stream.Position = 0;
+            await using (var fs = File.Create(docPath))
+                await stream.CopyToAsync(fs);
+
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo(textUtilPath)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            };
+            process.StartInfo.ArgumentList.Add("-convert");
+            process.StartInfo.ArgumentList.Add("txt");
+            process.StartInfo.ArgumentList.Add("-output");
+            process.StartInfo.ArgumentList.Add(txtPath);
+            process.StartInfo.ArgumentList.Add(docPath);
+
+            process.Start();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0 || !File.Exists(txtPath))
+            {
+                Console.WriteLine($"[WARN] textutil .doc extraction failed: {await errorTask}");
+                return null;
+            }
+
+            return CleanupExtractedText(await File.ReadAllTextAsync(txtPath));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] textutil .doc extraction unavailable: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
+            catch { /* ignore cleanup failures */ }
+        }
+    }
+
+    private async Task<string?> TryConvertLegacyDocWithLibreOfficeAsync(Stream stream, string fileName)
+    {
+        var soffice = FindExecutable("soffice") ?? FindExecutable("libreoffice");
+        if (soffice == null)
+            return null;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "career-coach-doc", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var docPath = Path.Combine(tempDir, Path.ChangeExtension(Path.GetFileName(fileName), ".doc"));
+        var txtPath = Path.Combine(tempDir, Path.GetFileNameWithoutExtension(docPath) + ".txt");
+        try
+        {
+            stream.Position = 0;
+            await using (var fs = File.Create(docPath))
+                await stream.CopyToAsync(fs);
+
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo(soffice)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            };
+            process.StartInfo.ArgumentList.Add("--headless");
+            process.StartInfo.ArgumentList.Add("--convert-to");
+            process.StartInfo.ArgumentList.Add("txt:Text");
+            process.StartInfo.ArgumentList.Add("--outdir");
+            process.StartInfo.ArgumentList.Add(tempDir);
+            process.StartInfo.ArgumentList.Add(docPath);
+
+            process.Start();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0 || !File.Exists(txtPath))
+            {
+                Console.WriteLine($"[WARN] LibreOffice .doc extraction failed: {await errorTask}");
+                return null;
+            }
+
+            return CleanupExtractedText(await File.ReadAllTextAsync(txtPath));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] LibreOffice .doc extraction unavailable: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
+            catch { /* ignore cleanup failures */ }
+        }
+    }
+
+    private static string? FindExecutable(string name)
+    {
+        var paths = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator);
+        foreach (var dir in paths.Where(p => !string.IsNullOrWhiteSpace(p)))
+        {
+            var candidate = Path.Combine(dir, name);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        return null;
+    }
+
+    private static string ExtractLikelyTextFromLegacyDoc(Stream stream)
+    {
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        var bytes = ms.ToArray();
+        var strings = new List<string>();
+
+        strings.AddRange(ExtractAsciiRuns(bytes));
+        strings.AddRange(ExtractUtf16Runs(bytes));
+
+        return CleanupExtractedText(string.Join("\n", strings));
+    }
+
+    private static IEnumerable<string> ExtractAsciiRuns(byte[] bytes)
+    {
+        var current = new StringBuilder();
+        foreach (var b in bytes)
+        {
+            if (b is >= 32 and <= 126)
+            {
+                current.Append((char)b);
+            }
+            else
+            {
+                if (current.Length >= 4)
+                    yield return current.ToString();
+                current.Clear();
+            }
+        }
+        if (current.Length >= 4)
+            yield return current.ToString();
+    }
+
+    private static IEnumerable<string> ExtractUtf16Runs(byte[] bytes)
+    {
+        var current = new StringBuilder();
+        for (var i = 0; i + 1 < bytes.Length; i += 2)
+        {
+            var value = BitConverter.ToUInt16(bytes, i);
+            if (value is >= 32 and <= 126)
+            {
+                current.Append((char)value);
+            }
+            else
+            {
+                if (current.Length >= 4)
+                    yield return current.ToString();
+                current.Clear();
+            }
+        }
+        if (current.Length >= 4)
+            yield return current.ToString();
     }
 
     private async Task<string?> TryExtractPdfTextWithPdfKitAsync(Stream stream)
@@ -283,13 +539,93 @@ print(pages.joined(separator: "\n\n"))
         s = Regex.Replace(s, @"\s*\n\s*", "\n");
         s = Regex.Replace(s, @"\n{3,}", "\n\n");
         s = Regex.Replace(s, @"([A-Za-z])\s{2,}([A-Za-z])", "$1 $2");
+        s = CollapseLetterSpacedWords(s);
+        s = RemoveConsecutiveDuplicateLines(s);
         return s.Trim();
     }
 
     private static int CountWords(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return 0;
-        return text.Split(new[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+        return Regex.Matches(text, @"[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*").Count;
+    }
+
+    private static (string Source, string Text) SelectBestPdfExtraction(IEnumerable<(string Source, string Text)> candidates)
+    {
+        (string Source, string Text)? best = null;
+        double bestScore = double.MinValue;
+
+        foreach (var candidate in candidates.Where(c => !string.IsNullOrWhiteSpace(c.Text)))
+        {
+            var score = ScorePdfExtraction(candidate.Text);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        return best ?? ("none", string.Empty);
+    }
+
+    private static double ScorePdfExtraction(string text)
+    {
+        var words = CountWords(text);
+        if (words == 0) return double.MinValue;
+
+        var nonEmptyLines = text.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToArray();
+        if (nonEmptyLines.Length == 0) return words;
+
+        var normalizedLines = nonEmptyLines
+            .Select(l => Regex.Replace(l.ToLowerInvariant(), @"\s+", " "))
+            .ToArray();
+
+        var uniqueLineRatio = normalizedLines.Distinct(StringComparer.Ordinal).Count() / (double)normalizedLines.Length;
+        var spacedWordArtifacts = Regex.Matches(text, @"(?<![\p{L}\p{N}])(?:[\p{L}\p{N}]\s+){3,}[\p{L}\p{N}](?![\p{L}\p{N}])").Count;
+        var spacedArtifactPenalty = Math.Min(0.3, spacedWordArtifacts / (double)Math.Max(1, words));
+
+        // Favor high-content extraction but heavily penalize duplicate-line artifacts.
+        return words * uniqueLineRatio * uniqueLineRatio * (1.0 - spacedArtifactPenalty);
+    }
+
+    private static string CollapseLetterSpacedWords(string input)
+    {
+        // Some PDF extractors emit words as single letters separated by spaces: "E x p e r i e n c e".
+        // Rejoin these runs to avoid inflated counts.
+        return Regex.Replace(
+            input,
+            @"(?<![\p{L}\p{N}])(?:[\p{L}\p{N}]\s+){2,}[\p{L}\p{N}](?![\p{L}\p{N}])",
+            m => Regex.Replace(m.Value, @"\s+", ""));
+    }
+
+    private static string RemoveConsecutiveDuplicateLines(string input)
+    {
+        var lines = input.Split('\n');
+        if (lines.Length <= 1) return input;
+
+        var output = new List<string>(lines.Length);
+        string? previous = null;
+        foreach (var line in lines)
+        {
+            var normalized = line.Trim();
+            if (normalized.Length == 0)
+            {
+                output.Add(line);
+                previous = null;
+                continue;
+            }
+
+            if (previous != null && string.Equals(previous, normalized, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            output.Add(line);
+            previous = normalized;
+        }
+
+        return string.Join('\n', output);
     }
 }
 
