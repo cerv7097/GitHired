@@ -34,7 +34,7 @@ public class JobAggregatorService
         // Build task list — Remotive is remote-only so only include it when appropriate
         var tasks = new List<Task<JobSearchResult>>
         {
-            _jSearch.SearchAsync(query, remoteOnly: remoteOnly, employmentType: employmentType),
+            _jSearch.SearchAsync(query, remoteOnly: remoteOnly, employmentType: employmentType, location: location),
             _adzuna.SearchAsync(query, location, remoteOnly),
             _theMuse.SearchAsync(query, experienceLevel, museCategory)
         };
@@ -67,6 +67,14 @@ public class JobAggregatorService
                 if (seen.Add(key))
                     merged.Add(job);
             }
+        }
+
+        // Boost location-matched jobs to the top so they aren't buried behind nationwide results
+        if (!string.IsNullOrWhiteSpace(location) && !remoteOnly)
+        {
+            merged = merged
+                .OrderByDescending(j => j.Location.Contains(location, StringComparison.OrdinalIgnoreCase))
+                .ToList();
         }
 
         // Post-filter by employment type for sources that don't natively support it

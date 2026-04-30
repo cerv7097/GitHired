@@ -42,9 +42,9 @@ function formatSalary(job: JobResult): string | null {
   return `Up to ${currency} ${job.maxSalary}${period}`;
 }
 
-export default function Jobs({ userId, initialJobs, initialLabel }: { userId?: string; initialJobs?: JobResult[]; initialLabel?: string }) {
+export default function Jobs({ userId, initialJobs, initialLabel, defaultLocation }: { userId?: string; initialJobs?: JobResult[]; initialLabel?: string; defaultLocation?: string }) {
   const [query, setQuery] = useState('');
-  const [location, setLocation] = useState('');
+  const [location, setLocation] = useState(defaultLocation ?? '');
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [employmentType, setEmploymentType] = useState('');
   const [page, setPage] = useState(1);
@@ -61,6 +61,10 @@ export default function Jobs({ userId, initialJobs, initialLabel }: { userId?: s
       setSearchLabel(initialLabel ?? null);
     }
   }, [initialJobs, initialLabel, userId]);
+
+  useEffect(() => {
+    if (defaultLocation && !location) setLocation(defaultLocation);
+  }, [defaultLocation, location]);
 
   useEffect(() => {
     if (!userId || !initialLabel) return;
@@ -116,6 +120,8 @@ export default function Jobs({ userId, initialJobs, initialLabel }: { userId?: s
         query: query.trim() || 'software engineer',
         location: location.trim(),
         page: String(pageNum),
+        remoteOnly: String(remoteOnly),
+        ...(employmentType ? { employmentType } : {}),
         ...(userId ? { userId } : {}),
       });
 

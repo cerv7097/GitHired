@@ -32,7 +32,8 @@ public class JSearchClient
         string query,
         int page = 1,
         bool remoteOnly = false,
-        string? employmentType = null)
+        string? employmentType = null,
+        string? location = null)
     {
         var apiKey = Environment.GetEnvironmentVariable("JSEARCH_API_KEY") ?? "";
         if (string.IsNullOrEmpty(apiKey))
@@ -42,7 +43,10 @@ public class JSearchClient
         http.DefaultRequestHeaders.TryAddWithoutValidation("X-RapidAPI-Key", apiKey);
         http.DefaultRequestHeaders.TryAddWithoutValidation("X-RapidAPI-Host", "jsearch.p.rapidapi.com");
 
-        var qs = $"query={Uri.EscapeDataString(query)}&page={page}&num_pages=1";
+        var locationSuffix = !string.IsNullOrWhiteSpace(location) && !remoteOnly ? $" in {location}" : "";
+        var qs = $"query={Uri.EscapeDataString(query + locationSuffix)}&page={page}&num_pages=1";
+        if (!string.IsNullOrWhiteSpace(location) && !remoteOnly)
+            qs += "&radius=161"; // ~100 miles in km
         if (remoteOnly) qs += "&remote_jobs_only=true";
         if (!string.IsNullOrEmpty(employmentType))
             qs += $"&employment_types={Uri.EscapeDataString(employmentType)}";

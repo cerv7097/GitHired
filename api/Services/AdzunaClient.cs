@@ -26,7 +26,10 @@ public class AdzunaClient
                  $"&results_per_page=10&what={Uri.EscapeDataString(query)}";
 
         if (!string.IsNullOrEmpty(location) && !remoteOnly)
+        {
             qs += $"&where={Uri.EscapeDataString(location)}";
+            qs += "&distance=161"; // ~100 miles in km
+        }
 
         var http = _factory.CreateClient();
         HttpResponseMessage response;

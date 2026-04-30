@@ -160,7 +160,9 @@ public static class SeniorityMatcher
     {
         var jobLevel = ClassifyJob(job.Title, job.DescriptionSnippet);
 
-        if (jobLevel is not null && jobLevel.Value > userLevel)
+        // Hard-block only when the job is more than one level above the user (e.g. Senior for an Entry user).
+        // One level up (e.g. Mid for an Entry user) is common in real job searching and should be allowed.
+        if (jobLevel is not null && (int)jobLevel.Value - (int)userLevel > 1)
         {
             return new JobSeniorityAssessment(
                 jobLevel,

@@ -106,8 +106,8 @@ public class RecommendJobsTool : AgentTool
 
             var matchedJobs = result.Jobs
                 .Select(job => new { Job = job, Seniority = SeniorityMatcher.AssessJob(job, seniority.Level) })
-                .Where(match => match.Seniority.IsCompatible && IsRelevantTechJob(match.Job, profileTerms))
-                .OrderByDescending(match => match.Seniority.CompatibilityScore)
+                .Where(match => match.Seniority.IsCompatible && IsRelevantTechJob(match.Job))
+                .OrderByDescending(match => RecommendationScore(match.Job, match.Seniority, profileTerms))
                 .ToList();
 
             var generatedAt = DateTime.UtcNow;
@@ -226,9 +226,37 @@ public class RecommendJobsTool : AgentTool
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private static bool IsRelevantTechJob(JobResult job, string[] profileTerms) =>
-        HasTechTitleKeyword(job.Title) &&
-        (profileTerms.Length == 0 || profileTerms.Any(term =>
+    private static bool IsRelevantTechJob(JobResult job) => HasTechTitleKeyword(job.Title);
+
+    private static int RecommendationScore(
+        JobResult job,
+        JobSeniorityAssessment seniority,
+        string[] profileTerms) =>
+        seniority.CompatibilityScore +
+        ProfileMatchScore(job, profileTerms) +
+        EmploymentFitScore(job);
+
+    private static int ProfileMatchScore(JobResult job, string[] profileTerms)
+    {
+        if (profileTerms.Length == 0) return 8;
+
+        var matches = profileTerms.Count(term =>
             job.Title.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-            (job.DescriptionSnippet ?? "").Contains(term, StringComparison.OrdinalIgnoreCase)));
+            (job.DescriptionSnippet ?? "").Contains(term, StringComparison.OrdinalIgnoreCase));
+
+        return Math.Min(matches * 8, 32);
+    }
+
+    private static int EmploymentFitScore(JobResult job)
+    {
+        var combined = $"{job.Title} {job.EmploymentType}";
+        if (combined.Contains("intern", StringComparison.OrdinalIgnoreCase)) return -12;
+        if (combined.Contains("new grad", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("graduate", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("junior", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("associate", StringComparison.OrdinalIgnoreCase))
+            return 10;
+        if (combined.Contains("full", StringComparison.OrdinalIgnoreCase)) return 8;
+        return 0;
+    }
 }

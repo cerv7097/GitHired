@@ -44,7 +44,8 @@ public record UserProfileRecord(
     string Email,
     string? ResumeText,
     string Education,  // raw JSONB string: [{"degree":"...","institution":"...","year":"..."}]
-    string RecommendedJobs // raw JSONB string with cached recommendation payload and metadata
+    string RecommendedJobs, // raw JSONB string with cached recommendation payload and metadata
+    string? Location  // city/state extracted from resume, e.g. "Denver, CO"
 );
 
 public class Db {
@@ -53,11 +54,22 @@ public class Db {
     var host = cfg["PGHOST"]; var port = cfg["PGPORT"];
     var db = cfg["PGDATABASE"]; var user = cfg["PGUSER"]; var pw = cfg["PGPASSWORD"];
     var ssl = cfg["PGSSLmode"] ?? "require";
-    _cs = $"Host={host};Port={port};Database={db};Username={user};Password={pw};SSL Mode={ssl};Trust Server Certificate=true";
+    if (string.IsNullOrWhiteSpace(host) ||
+        string.IsNullOrWhiteSpace(db) ||
+        string.IsNullOrWhiteSpace(user) ||
+        string.IsNullOrWhiteSpace(pw))
+    {
+      _cs = "__MISSING_POSTGRES_CONFIGURATION__";
+      return;
+    }
+    _cs = $"Host={host};Port={port};Database={db};Username={user};Password={pw};SSL Mode={ssl};Trust Server Certificate=true;Timeout=5;Command Timeout=10";
   }
 
   public async Task EnsureAuthTablesAsync()
   {
+    if (!IsConfigured())
+      throw new InvalidOperationException("PostgreSQL is not configured. Set PGHOST, PGDATABASE, PGUSER, and PGPASSWORD.");
+
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
     var sql = """
@@ -268,6 +280,9 @@ public class Db {
 
   public async Task EnsureProfileTablesAsync()
   {
+    if (!IsConfigured())
+      throw new InvalidOperationException("PostgreSQL is not configured. Set PGHOST, PGDATABASE, PGUSER, and PGPASSWORD.");
+
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
     // No FK to users — EnsureAuthTablesAsync drops/recreates users each startup,
@@ -295,10 +310,13 @@ public class Db {
       ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS resume_text TEXT;
       ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS education JSONB NOT NULL DEFAULT '[]';
       ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS recommended_jobs JSONB NOT NULL DEFAULT '{}';
+      ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS location TEXT;
       """;
     await using var migrate_cmd = new NpgsqlCommand(migrate, con);
     await migrate_cmd.ExecuteNonQueryAsync();
   }
+
+  private bool IsConfigured() => _cs != "__MISSING_POSTGRES_CONFIGURATION__";
 
   public async Task UpsertUserProfileAsync(
     string userId,
@@ -310,14 +328,15 @@ public class Db {
     int? atsScore,
     string? resumeText = null,
     string? education = null,
-    bool replaceResumeData = false)
+    bool replaceResumeData = false,
+    string? location = null)
   {
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
     var sql = replaceResumeData
       ? """
-      INSERT INTO user_profiles (user_id, skills, tools, roles, experience_level, summary, ats_score, resume_text, education, updated_at)
-      VALUES (@uid, @skills, @tools, @roles, @exp, @summary, @ats, @resumeText, @education::jsonb, NOW())
+      INSERT INTO user_profiles (user_id, skills, tools, roles, experience_level, summary, ats_score, resume_text, education, location, updated_at)
+      VALUES (@uid, @skills, @tools, @roles, @exp, @summary, @ats, @resumeText, @education::jsonb, @location, NOW())
       ON CONFLICT (user_id) DO UPDATE SET
         skills = EXCLUDED.skills,
         tools = EXCLUDED.tools,
@@ -327,11 +346,12 @@ public class Db {
         ats_score = COALESCE(EXCLUDED.ats_score, user_profiles.ats_score),
         resume_text = EXCLUDED.resume_text,
         education = EXCLUDED.education,
+        location = COALESCE(EXCLUDED.location, user_profiles.location),
         updated_at = NOW();
       """
       : """
-      INSERT INTO user_profiles (user_id, skills, tools, roles, experience_level, summary, ats_score, resume_text, education, updated_at)
-      VALUES (@uid, @skills, @tools, @roles, @exp, @summary, @ats, @resumeText, @education::jsonb, NOW())
+      INSERT INTO user_profiles (user_id, skills, tools, roles, experience_level, summary, ats_score, resume_text, education, location, updated_at)
+      VALUES (@uid, @skills, @tools, @roles, @exp, @summary, @ats, @resumeText, @education::jsonb, @location, NOW())
       ON CONFLICT (user_id) DO UPDATE SET
         skills = EXCLUDED.skills,
         tools = EXCLUDED.tools,
@@ -341,6 +361,7 @@ public class Db {
         ats_score = COALESCE(EXCLUDED.ats_score, user_profiles.ats_score),
         resume_text = COALESCE(EXCLUDED.resume_text, user_profiles.resume_text),
         education = CASE WHEN EXCLUDED.education = '[]'::jsonb THEN user_profiles.education ELSE EXCLUDED.education END,
+        location = COALESCE(EXCLUDED.location, user_profiles.location),
         updated_at = NOW();
       """;
     await using var cmd = new NpgsqlCommand(sql, con);
@@ -353,6 +374,7 @@ public class Db {
     cmd.Parameters.AddWithValue("ats", (object?)atsScore ?? DBNull.Value);
     cmd.Parameters.AddWithValue("resumeText", (object?)resumeText ?? DBNull.Value);
     cmd.Parameters.Add(new NpgsqlParameter("education", NpgsqlDbType.Jsonb) { Value = education ?? "[]" });
+    cmd.Parameters.AddWithValue("location", (object?)location ?? DBNull.Value);
     await cmd.ExecuteNonQueryAsync();
   }
 
@@ -382,7 +404,8 @@ public class Db {
              p.assessment_scores, p.search_history, p.updated_at,
              u.first_name, u.last_name, u.email,
              p.resume_text, COALESCE(p.education::text, '[]'),
-             COALESCE(p.recommended_jobs::text, '{}')
+             COALESCE(p.recommended_jobs::text, '{}'),
+             p.location
       FROM user_profiles p
       JOIN users u ON u.id = p.user_id
       WHERE p.user_id = @uid
@@ -408,7 +431,8 @@ public class Db {
       Email: reader.GetString(11),
       ResumeText: reader.IsDBNull(12) ? null : reader.GetString(12),
       Education: reader.GetString(13),
-      RecommendedJobs: reader.GetString(14)
+      RecommendedJobs: reader.GetString(14),
+      Location: reader.IsDBNull(15) ? null : reader.GetString(15)
     );
   }
 

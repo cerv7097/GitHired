@@ -37,6 +37,10 @@ app.MapGet("/api/health", ([FromServices] GradientClient llm, [FromServices] Res
     try
     {
         var hasApiKey = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GRADIENT_API_KEY"));
+        var hasJSearch = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("JSEARCH_API_KEY"));
+        var hasAdzuna = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ADZUNA_APP_ID")) &&
+                        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ADZUNA_APP_KEY"));
+        var hasMuse = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("THE_MUSE_API_KEY"));
         return Results.Ok(new
         {
             status = "healthy",
@@ -44,9 +48,18 @@ app.MapGet("/api/health", ([FromServices] GradientClient llm, [FromServices] Res
             {
                 llm = "initialized",
                 parser = "initialized",
-                apiKeyConfigured = hasApiKey
+                apiKeyConfigured = hasApiKey,
+                jobApis = new
+                {
+                    jsearchConfigured = hasJSearch,
+                    adzunaConfigured = hasAdzuna,
+                    theMuseConfigured = hasMuse,
+                    remotiveConfigured = true
+                }
             },
-            message = hasApiKey ? "All services ready" : "WARNING: GRADIENT_API_KEY not set"
+            message = hasApiKey && (hasJSearch || hasAdzuna)
+                ? "Core services ready"
+                : "WARNING: one or more core API keys are not set"
         });
     }
     catch (Exception ex)
@@ -336,7 +349,8 @@ app.MapPost("/api/resume/upload", async (
                     "Only extract information directly supported by the resume text. Do not infer unrelated career paths. " +
                     "JSON keys: skills (string[]), tools (string[]), roles (string[] of job titles explicitly present in the resume or the closest direct tech equivalents), " +
                     "education (array of {degree, institution, year}), " +
-                    "experience_level (one of: entry, mid, senior, lead), summary (string).";
+                    "experience_level (one of: entry, mid, senior, lead), summary (string), " +
+                    "location (string — city and state from the resume header/contact info, e.g. \"Denver, CO\"; null if not found).";
 
                 var extractRaw = await parser_llm.ChatAsync(extractSys,
                     $"Resume:\n{resumeText[..Math.Min(6000, resumeText.Length)]}\nReturn only JSON.",
@@ -381,8 +395,11 @@ app.MapPost("/api/resume/upload", async (
                 ? sumEl.GetString() : null;
             var pEducation = pr.TryGetProperty("education", out var eduEl)
                 ? JsonSerializer.Serialize(eduEl) : "[]";
+            var pLocation = pr.TryGetProperty("location", out var locEl) && locEl.ValueKind == JsonValueKind.String
+                ? locEl.GetString()?.Trim() : null;
+            if (string.IsNullOrWhiteSpace(pLocation)) pLocation = null;
 
-            Console.WriteLine($"[INFO] Profile extraction: skills={pSkills.Length}, roles={pRoles.Length}, tools={pTools.Length}, expLevel={pExpLevel}");
+            Console.WriteLine($"[INFO] Profile extraction: skills={pSkills.Length}, roles={pRoles.Length}, tools={pTools.Length}, expLevel={pExpLevel}, location={pLocation}");
 
             // Always save — even empty arrays anchor the profile row so recommendations can work
                 await profile_db.UpsertUserProfileAsync(
@@ -390,7 +407,8 @@ app.MapPost("/api/resume/upload", async (
                     pExpLevel, pSummary, null,
                     resumeText: parseResult.Text,
                     education: pEducation,
-                    replaceResumeData: true);
+                    replaceResumeData: true,
+                    location: pLocation);
 
                 profileSw.Stop();
                 Console.WriteLine($"[TIMING] Profile extraction/save completed in {profileSw.ElapsedMilliseconds}ms");
@@ -541,8 +559,8 @@ app.MapGet("/api/jobs/recommended", async (
         return Results.NotFound(new { error = "No profile found. Please upload your resume first." });
 
     var isRemote = location?.Equals("remote", StringComparison.OrdinalIgnoreCase) == true;
-    var searchLocation = isRemote ? null : location?.Trim();
-    var cacheLocation = RecommendationCache.NormalizeLocation(location);
+    var searchLocation = isRemote ? null : (location?.Trim() ?? profile.Location);
+    var cacheLocation = RecommendationCache.NormalizeLocation(searchLocation);
     var cachedRecommendations = await db.GetRecommendedJobsAsync(userId);
     if (RecommendationCache.TryGetFreshDashboardPayload(
         cachedRecommendations,
@@ -651,17 +669,39 @@ app.MapGet("/api/jobs/recommended", async (
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
-    bool MatchesProfile(string title, string snippet) =>
-        profileTerms.Length == 0 ||
-        profileTerms.Any(term =>
+    int ProfileMatchScore(string title, string snippet)
+    {
+        if (profileTerms.Length == 0) return 8;
+
+        var matches = profileTerms.Count(term =>
             title.Contains(term, StringComparison.OrdinalIgnoreCase) ||
             snippet.Contains(term, StringComparison.OrdinalIgnoreCase));
 
-    bool IsRelevantTechJob(JobResult job) =>
-        HasTechTitleKeyword(job.Title) && MatchesProfile(job.Title, job.DescriptionSnippet ?? "");
+        return Math.Min(matches * 8, 32);
+    }
+
+    int EmploymentFitScore(JobResult job)
+    {
+        var combined = $"{job.Title} {job.EmploymentType}";
+        if (combined.Contains("intern", StringComparison.OrdinalIgnoreCase)) return -12;
+        if (combined.Contains("new grad", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("graduate", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("junior", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("associate", StringComparison.OrdinalIgnoreCase))
+            return 10;
+        if (combined.Contains("full", StringComparison.OrdinalIgnoreCase)) return 8;
+        return 0;
+    }
+
+    bool IsRelevantTechJob(JobResult job) => HasTechTitleKeyword(job.Title);
+
+    int RecommendationScore(JobResult job, JobSeniorityAssessment jobSeniority) =>
+        jobSeniority.CompatibilityScore +
+        ProfileMatchScore(job.Title, job.DescriptionSnippet ?? "") +
+        EmploymentFitScore(job);
 
     queries = queries
-        .Where(q => HasTechTitleKeyword(q) && MatchesProfile(q, ""))
+        .Where(HasTechTitleKeyword)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .Take(2)
         .ToList();
@@ -681,7 +721,7 @@ app.MapGet("/api/jobs/recommended", async (
                 var jobSeniority = SeniorityMatcher.AssessJob(j, seniority.Level);
                 if (IsRelevantTechJob(j) && jobSeniority.IsCompatible && seen.Add(key))
                 {
-                    allJobs.Add((jobSeniority.CompatibilityScore, new
+                    allJobs.Add((RecommendationScore(j, jobSeniority), new
                     {
                         title = j.Title,
                         company = j.Company,
@@ -716,7 +756,7 @@ app.MapGet("/api/jobs/recommended", async (
         try
         {
             var fallbackQuery = profile.Roles.FirstOrDefault() ?? "software engineer";
-            if (!HasTechTitleKeyword(fallbackQuery) || !MatchesProfile(fallbackQuery, ""))
+            if (!HasTechTitleKeyword(fallbackQuery))
                 fallbackQuery = profile.Skills.FirstOrDefault(s => HasTechTitleKeyword(s)) ?? "software engineer";
 
             var fallback = await aggregator.SearchAllAsync(fallbackQuery, searchLocation, isRemote, normalizedExperienceLevel, museCategory: "Technology");
@@ -726,7 +766,7 @@ app.MapGet("/api/jobs/recommended", async (
                 var jobSeniority = SeniorityMatcher.AssessJob(j, seniority.Level);
                 if (IsRelevantTechJob(j) && jobSeniority.IsCompatible && seen.Add(key))
                 {
-                    allJobs.Add((jobSeniority.CompatibilityScore, new
+                    allJobs.Add((RecommendationScore(j, jobSeniority), new
                     {
                         title = j.Title,
                         company = j.Company,
@@ -771,7 +811,8 @@ app.MapGet("/api/jobs/recommended", async (
             experienceLevelUncertain = seniority.IsUncertain,
             experienceLevelReason = seniority.Reason,
             atsScore = profile.AtsScore,
-            searchQueries = queries
+            searchQueries = queries,
+            location = searchLocation
         },
         totalResults = allJobs.Count,
         jobs = allJobs
@@ -780,13 +821,16 @@ app.MapGet("/api/jobs/recommended", async (
             .ToList()
     };
 
-    try
+    if (allJobs.Count > 0)
     {
-        await db.SaveRecommendedJobsAsync(userId, JsonSerializer.Serialize(responsePayload));
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[WARN] Could not cache recommendations for user {userId}: {ex.Message}");
+        try
+        {
+            await db.SaveRecommendedJobsAsync(userId, JsonSerializer.Serialize(responsePayload));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Could not cache recommendations for user {userId}: {ex.Message}");
+        }
     }
 
     return Results.Ok(responsePayload);

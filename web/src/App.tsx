@@ -29,6 +29,7 @@ interface MatchedOn {
   experienceLevel: string;
   atsScore?: number | null;
   searchQueries?: string[];
+  location?: string | null;
 }
 
 function loadStoredAtsScore(userId: string) {
@@ -1248,7 +1249,7 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
           </div>
         </>
       ) : activeTab === 'jobs' ? (
-        <Jobs userId={user.id} initialJobs={recommendations} initialLabel={matchedOn ? `AI-recommended for your profile` : undefined} />
+        <Jobs userId={user.id} initialJobs={recommendations} initialLabel={matchedOn ? `AI-recommended for your profile` : undefined} defaultLocation={matchedOn?.location ?? undefined} />
       ) : activeTab === 'assessment' ? (
         <Assessment />
       ) : (
