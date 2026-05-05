@@ -1932,8 +1932,29 @@ details[open] .analysis-summary-hint::before {
     padding: 20px;
   }
 
+  /* Top nav stacks: brand on the first row, tabs on a second row, profile on the
+     right of the brand. Previously the tabs were hidden, leaving mobile users
+     stuck on the Dashboard tab — now they wrap to a new row and shrink slightly
+     so all four (Dashboard / Jobs / Assessment / Resources) stay reachable. */
+  .top-nav {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
   .nav-links {
-    display: none;
+    display: flex;
+    order: 3;          /* push tabs onto a new row below brand + profile */
+    flex-basis: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
+    overflow-x: auto;  /* allow horizontal scroll on very narrow phones */
+  }
+
+  .nav-links button {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    flex-shrink: 0;
   }
 
   .app-shell {
@@ -2347,8 +2368,41 @@ details[open] .analysis-summary-hint::before {
 }
 
 /* Catch-all for the last common lavender hex (#cdd9ff was missed in some places). */
-:root[data-theme="light"] [style*="#cdd9ff"]:not(.dashboard-hero *):not(.dashboard-hero) {
+:root[data-theme="light"] [style*="#cdd9ff"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#e8eeff"]:not(.dashboard-hero *):not(.dashboard-hero) {
   color: #000000 !important;
+}
+
+/* ─── Insights tab — force black text everywhere inside the summary card ─── */
+/* The bucket-bar labels, descriptions, "Question review" rows, and the
+   personalized insight paragraph all use inline pale-white colors (#e8eeff /
+   #cdd9ff) that are invisible on light backgrounds. Sweep them all black. */
+:root[data-theme="light"] .assessment-summary-card,
+:root[data-theme="light"] .assessment-summary-card h3,
+:root[data-theme="light"] .assessment-summary-card h4,
+:root[data-theme="light"] .assessment-summary-card p,
+:root[data-theme="light"] .assessment-summary-card span,
+:root[data-theme="light"] .assessment-summary-card small,
+:root[data-theme="light"] .assessment-summary-card li,
+:root[data-theme="light"] .assessment-summary-card div {
+  color: #000000 !important;
+}
+
+/* Preserve meaningful accent colors inside the summary card:
+   - amber for "weakest" tag, green for "strongest", cyan for "For you" prefix,
+     the maturity badge (already cyan-tinted via .maturity-badge), and the
+     personalized insight section title. */
+:root[data-theme="light"] .assessment-summary-card .maturity-badge {
+  color: var(--accent) !important;
+}
+:root[data-theme="light"] .assessment-summary-card [style*="#fb923c"] {
+  color: #c2410c !important; /* darker amber so it stays readable on white */
+}
+:root[data-theme="light"] .assessment-summary-card [style*="#4ade80"] {
+  color: #15803d !important; /* darker green */
+}
+:root[data-theme="light"] .assessment-summary-card [style*="#22d3ee"] {
+  color: #0e7490 !important; /* darker cyan for the "For you:" tag */
 }
 
 :root[data-theme="light"] .nav-links button {
@@ -2742,7 +2796,8 @@ details[open] .analysis-summary-hint::before {
 }
 
 /* Rating buttons: keep them white-on-white-with-border so they read as buttons,
-   not as dark holes. Selected state keeps the cyan gradient. */
+   not as dark holes. Selected state keeps the cyan gradient — needs higher
+   specificity than the unselected rule below it. */
 :root[data-theme="light"] .rating-scale button {
   background: rgba(255, 255, 255, 0.85);
   border-color: var(--border);
@@ -2752,6 +2807,15 @@ details[open] .analysis-summary-hint::before {
 :root[data-theme="light"] .rating-scale button:hover {
   background: var(--accent-soft);
   border-color: rgba(14, 165, 233, 0.4);
+}
+
+/* Selected rating button — solid filled cyan/blue gradient with white text.
+   Specificity must beat ":root[data-theme] .rating-scale button" above. */
+:root[data-theme="light"] .rating-scale button.selected {
+  background: linear-gradient(135deg, #0ea5e9, #4f46e5) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+  box-shadow: 0 8px 20px rgba(14, 165, 233, 0.3);
 }
 
 :root[data-theme="light"] .question-index {
