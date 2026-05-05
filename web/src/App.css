@@ -587,6 +587,61 @@
   font-weight: 600;
 }
 
+/* Skills Found tile is interactive when there are skills to view. The hover
+   state mirrors the resource/track cards so the affordance reads consistently. */
+.stat-card-clickable {
+  cursor: pointer;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  border: 1px solid transparent;
+}
+
+.stat-card-clickable:hover {
+  border-color: rgba(34, 211, 238, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -12px rgba(34, 211, 238, 0.3);
+}
+
+.stat-card-clickable:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.6);
+  outline-offset: 2px;
+}
+
+/* Compact chip preview inside the Skills Found tile — shows up to 4 chips so the
+   user can SEE the data, not just the count. */
+.stat-skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.stat-skill-chip {
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  color: #cdd9ff;
+  white-space: nowrap;
+}
+
+.stat-skill-action {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: #22d3ee;
+  font-weight: 600;
+}
+
+/* Modal cloud — full list of skills displayed as wrap-around pills. */
+.skill-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .resume-card {
   padding: 0;
   overflow: hidden;
@@ -930,6 +985,43 @@
   white-space: pre-wrap;
   line-height: 1.6;
   color: #dfe8ff;
+  margin-top: 12px;
+}
+
+/* Summary row of the collapsible analysis card. The disclosure triangle is
+   hidden in favor of a custom hint string driven entirely by CSS so the affordance
+   reads as part of the design rather than a raw <details> element. */
+.analysis-summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0;
+  list-style: none;
+  user-select: none;
+}
+
+.analysis-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The JSX renders <span class="analysis-summary-hint" /> with no text content;
+   we inject "click to expand" / "click to collapse" via ::before based on the
+   parent <details>'s open state. */
+.analysis-summary-hint {
+  font-size: 0;
+}
+
+.analysis-summary-hint::before {
+  content: 'click to expand';
+  font-size: 0.78rem;
+  color: #7c91c1;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+details[open] .analysis-summary-hint::before {
+  content: 'click to collapse';
 }
 
 .tool-accordion {
@@ -1108,79 +1200,157 @@
 
 .assessment-stage-indicator {
   display: flex;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: 6px;
+  padding: 6px;
   border-radius: 999px;
   background: rgba(26, 52, 104, 0.4);
 }
 
-.assessment-stage-indicator span {
+/* Target both <span> (legacy non-interactive) and <button> (clickable nav shortcuts). */
+.assessment-stage-indicator span,
+.assessment-stage-indicator button {
   text-transform: uppercase;
   letter-spacing: 0.15em;
   font-size: 0.7rem;
   color: #7c91c1;
+  padding: 8px 14px;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.assessment-stage-indicator span.active {
-  color: #22d3ee;
+/* Hover state — only fires on enabled, non-active buttons so users see when a
+   chip is actually a navigation shortcut. */
+.assessment-stage-indicator button:not(:disabled):not(.active):hover {
+  color: #cdd9ff;
+  background: rgba(100, 149, 255, 0.12);
+}
+
+/* Active stage — clearly highlighted with a filled cyan/blue pill. */
+.assessment-stage-indicator span.active,
+.assessment-stage-indicator button.active {
+  color: #f4fbff;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.35), rgba(100, 149, 255, 0.35));
   font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.45) inset;
+}
+
+/* Disabled-but-not-active chips look subdued so the user knows they can't jump
+   to that step yet (e.g. "Insights" before answering all questions). */
+.assessment-stage-indicator button:disabled:not(.active) {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .assessment-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
 }
 
 .assessment-track-card {
-  border-radius: 20px;
-  border: 1px solid rgba(37, 68, 122, 0.6);
-  padding: 20px;
-  background: rgba(4, 10, 28, 0.65);
+  position: relative;
+  border-radius: 18px;
+  border: 1px solid rgba(37, 68, 122, 0.5);
+  padding: 22px;
+  background: linear-gradient(160deg, rgba(8, 18, 42, 0.85), rgba(4, 10, 28, 0.7));
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border 150ms ease, transform 150ms ease;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease, background 150ms ease;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-height: 260px;
+  gap: 10px;
+  min-height: 280px;
 }
 
 .assessment-track-card:hover {
-  border-color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.6);
   transform: translateY(-2px);
+  box-shadow: 0 8px 24px -12px rgba(34, 211, 238, 0.35);
 }
 
-.assessment-track-meta {
+.assessment-track-card:hover .assessment-track-icon {
+  transform: scale(1.05);
+}
+
+/* The Unknown track is the "not sure where to start?" entry point — give it a
+   distinct accent so it reads as a different kind of action, not just one more
+   field-specific assessment. */
+.assessment-track-card--unknown {
+  background: linear-gradient(160deg, rgba(34, 211, 238, 0.08), rgba(100, 149, 255, 0.08));
+  border-color: rgba(34, 211, 238, 0.35);
+}
+
+.assessment-track-card--unknown:hover {
+  border-color: rgba(34, 211, 238, 0.7);
+}
+
+.assessment-track-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: rgba(34, 211, 238, 0.12);
+  border: 1px solid rgba(34, 211, 238, 0.25);
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  margin-bottom: 4px;
+  transition: transform 150ms ease;
 }
 
 .assessment-track-card h3 {
   margin: 4px 0;
+  font-size: 1.05rem;
+  line-height: 1.35;
 }
 
 .assessment-track-card p {
   color: #b6c6ff;
   margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
-.assessment-track-card ul {
-  margin: 10px 0;
-  padding-left: 18px;
-  color: #8ea5d9;
-  font-size: 0.9rem;
+.assessment-track-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.assessment-track-tags .pill.subtle.small {
+  font-size: 0.7rem;
+  padding: 3px 9px;
+  letter-spacing: 0.04em;
+  text-transform: none;
 }
 
 .assessment-track-footer {
   margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid rgba(37, 68, 122, 0.35);
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.assessment-track-meta-text {
+  color: #7c91c1;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.assessment-track-cta {
   font-weight: 600;
-  color: #9db7ff;
+  color: #cdd9ff;
+  font-size: 0.92rem;
+  transition: color 150ms ease;
+}
+
+.assessment-track-card:hover .assessment-track-cta {
+  color: #22d3ee;
 }
 
 .assessment-stage-card {
@@ -1329,30 +1499,70 @@
 
 .resources-hero {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 24px;
-  align-items: center;
-}
-
-.resources-hero-metrics {
-  display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-width: 220px;
-  align-items: flex-start;
+  gap: 8px;
 }
 
-.resources-metric-label {
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-  font-size: 0.7rem;
-  color: #7c91c1;
-}
-
-.resources-metric-value {
-  font-size: 1.3rem;
+/* Inline count next to the hero h2 — replaces the separate metrics column. */
+.resources-hero-count {
+  margin-left: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.12);
+  color: #22d3ee;
+  font-size: 0.78rem;
   font-weight: 600;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+}
+
+/* Search box in the sidebar — visually unified with the existing card chrome. */
+.resources-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(91, 129, 207, 0.5);
+  background: rgba(9, 15, 36, 0.85);
+  transition: border-color 150ms ease;
+}
+
+.resources-search:focus-within {
+  border-color: rgba(34, 211, 238, 0.7);
+}
+
+.resources-search-icon {
+  font-size: 0.95rem;
+  opacity: 0.7;
+}
+
+.resources-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #e8eeff;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.resources-search input::placeholder {
+  color: #5a74a8;
+}
+
+.resources-search-clear {
+  background: transparent;
+  border: none;
+  color: #8ea5d9;
+  cursor: pointer;
+  font-size: 1.05rem;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.resources-search-clear:hover {
+  color: #f4fbff;
 }
 
 .resources-layout {
@@ -1408,6 +1618,37 @@
   margin-bottom: 8px;
 }
 
+/* Industry chips in the Resources sidebar — icon on the left, label on the right. */
+.resources-industry-chips {
+  gap: 6px;
+}
+
+.resources-industry-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  font-size: 0.92rem;
+}
+
+.resources-industry-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.resources-industry-chip.active .resources-industry-icon {
+  background: rgba(34, 211, 238, 0.2);
+  border-color: rgba(34, 211, 238, 0.5);
+}
+
 .resources-content {
   display: flex;
   flex-direction: column;
@@ -1431,49 +1672,96 @@
 .resource-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
+  gap: 10px;
+  padding: 18px;
   border-radius: 16px;
   border: 1px solid rgba(57, 105, 200, 0.45);
-  background: rgba(7, 15, 38, 0.8);
+  background: linear-gradient(160deg, rgba(8, 18, 42, 0.85), rgba(4, 10, 28, 0.7));
   color: inherit;
   text-decoration: none;
-  transition: transform 150ms ease, border 150ms ease;
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  min-height: 200px;
 }
 
 .resource-card:hover {
   transform: translateY(-2px);
-  border-color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow: 0 8px 24px -12px rgba(34, 211, 238, 0.35);
 }
 
-.resource-card-header {
+/* Pills row at the top — level + format side-by-side. */
+.resource-card-pills {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.resource-card h4 {
+.resource-card-title {
   margin: 4px 0 0;
+  font-size: 1rem;
+  line-height: 1.35;
+  color: #f4fbff;
 }
 
 .resource-provider {
   margin: 0;
   color: #9db7ff;
+  font-size: 0.85rem;
 }
 
-.resource-meta {
+/* Tag chips below the title — limited to 3 visible plus an overflow indicator. */
+.resource-card-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  color: #7c91c1;
-  font-size: 0.8rem;
+  gap: 4px;
 }
 
-.resource-format {
-  font-size: 0.75rem;
-  color: #9db7ff;
+.resource-card-tag-more {
+  font-size: 0.7rem;
+  color: #7c91c1;
+  align-self: center;
+}
+
+/* Footer: duration on the left, "Open ↗" affordance on the right. */
+.resource-card-footer {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid rgba(37, 68, 122, 0.35);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.resource-card-duration {
+  color: #7c91c1;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+}
+
+.resource-card-open {
+  font-weight: 600;
+  color: #cdd9ff;
+  font-size: 0.88rem;
+  transition: color 150ms ease;
+}
+
+.resource-card:hover .resource-card-open {
+  color: #22d3ee;
+}
+
+/* Small pill variant used inside resource cards for tag chips. */
+.pill.subtle.small {
+  font-size: 0.68rem;
+  padding: 2px 8px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+/* Empty state shown when search + filter combine to zero results. */
+.resources-empty-state {
+  text-align: center;
+  padding: 40px 20px;
 }
 
 .resources-empty {
@@ -1525,6 +1813,22 @@
   align-items: center;
   gap: 32px;
   flex-wrap: wrap;
+}
+
+/* Skill maturity badge — sits inside the score ring below the % so the user
+   gets a plain-English label (Exploring / Foundational / Proficient / Advanced)
+   in addition to the raw number. */
+.maturity-badge {
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.18), rgba(100, 149, 255, 0.18));
+  color: #cdd9ff;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3) inset;
 }
 
 .summary-copy p {
@@ -1861,4 +2165,667 @@
   .job-salary {
     margin-left: 0;
   }
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   LIGHT THEME OVERRIDES
+   Activated by setting data-theme="light" on <html>. The dark theme remains
+   the default; this block is a layered override that re-skins the high-impact
+   surfaces (cards, text, borders, modals, nav, inputs, hover/active states).
+   It deliberately does NOT touch every dark-themed rule — accent gradients,
+   subtle decorative shadows, and brand colors are kept consistent across
+   themes so the visual identity stays.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme="light"] body {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .card {
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px -8px rgba(15, 30, 66, 0.08);
+}
+
+:root[data-theme="light"] h1,
+:root[data-theme="light"] h2,
+:root[data-theme="light"] h3,
+:root[data-theme="light"] h4,
+:root[data-theme="light"] h5 {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] p {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .muted,
+:root[data-theme="light"] small {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .section-title {
+  color: var(--text-faint);
+}
+
+/* Top nav */
+:root[data-theme="light"] .top-nav {
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid var(--border-soft);
+  backdrop-filter: blur(12px);
+}
+
+/* GitHired wordmark — uses a white→light-blue gradient via -webkit-background-clip
+   in dark mode. Override with a solid black fill in light mode so it actually shows. */
+:root[data-theme="light"] .nav-app-name {
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  -webkit-text-fill-color: #000000;
+  color: #000000;
+}
+
+/* Logo — the dark-theme rule applies brightness(0) invert(1) to recolor the source
+   image white. In light mode we drop the invert so the same source renders black. */
+:root[data-theme="light"] .nav-logo {
+  filter: brightness(0);
+}
+
+:root[data-theme="light"] .nav-company {
+  color: #000000;
+}
+
+/* ATS score circle — the big "92" number reads as the inherited dark text color
+   in dark mode but didn't have its own override, so on light mode it picked up
+   whatever the parent .result-card-was-doing. Force black explicitly for both
+   the score number and the "/100" suffix. */
+:root[data-theme="light"] .score-circle {
+  color: #000000;
+}
+
+:root[data-theme="light"] .score-circle span {
+  color: #000000;
+}
+
+/* ----- Catch-all for inline gray hex colors set via JSX `style={{ color: ... }}` -----
+   The codebase has ~29 inline gray hex values spread across components. Rather than
+   touch every JSX file, this matches the common ones via attribute selectors and forces
+   black in light mode. The dashboard hero (which sits on a dark video) already has
+   higher-priority `!important` overrides, so this rule does NOT affect that area. */
+:root[data-theme="light"] [style*="#8ea5d9"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#7c91c1"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#9db7ff"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#cfd9ff"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#cdd9ff"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#5a74a8"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#556080"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#b6c6ff"]:not(.dashboard-hero *):not(.dashboard-hero),
+:root[data-theme="light"] [style*="#dbe4ff"]:not(.dashboard-hero *):not(.dashboard-hero) {
+  color: #000000 !important;
+}
+
+/* Direct hero-description overrides — backup in case the inline attribute matcher
+   above fails (browsers can normalize the style attribute string in ways that
+   break attribute-substring matching). Forces black on every paragraph and
+   small text inside the Jobs/Assessment/Resources hero cards. */
+:root[data-theme="light"] .jobs-hero p,
+:root[data-theme="light"] .jobs-hero span,
+:root[data-theme="light"] .jobs-hero small,
+:root[data-theme="light"] .assessment-hero p,
+:root[data-theme="light"] .assessment-hero span,
+:root[data-theme="light"] .assessment-hero small,
+:root[data-theme="light"] .resources-hero p,
+:root[data-theme="light"] .resources-hero span,
+:root[data-theme="light"] .resources-hero small {
+  color: #000000 !important;
+}
+
+/* Same for the Resume Upload section description ("We'll parse the document…"). */
+:root[data-theme="light"] .resume-upload p {
+  color: #000000 !important;
+}
+
+/* Filter sidebar results card on the Jobs tab — was a dark card with light-blue
+   text. Match the rest of the light theme: translucent surface, dark border, black text. */
+:root[data-theme="light"] .industry-insight {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: var(--border);
+  color: #000000;
+}
+
+:root[data-theme="light"] .industry-insight .industry-signal {
+  color: #000000;
+}
+
+:root[data-theme="light"] .industry-insight p {
+  color: #000000 !important;
+}
+
+/* ─── Round 2: explicit black overrides for remaining lavender spots ─── */
+
+/* "Drag & drop your resume here" + "or click to browse" */
+:root[data-theme="light"] .upload-dropzone,
+:root[data-theme="light"] .upload-dropzone .file-meta strong,
+:root[data-theme="light"] .upload-dropzone .file-meta span,
+:root[data-theme="light"] .file-meta strong,
+:root[data-theme="light"] .file-meta span {
+  color: #000000 !important;
+}
+
+/* Progress Track on the right sidebar — "Profile / Skills" labels and their % */
+:root[data-theme="light"] .progress-label,
+:root[data-theme="light"] .progress-label span {
+  color: #000000 !important;
+}
+
+/* "matched on" text and search label under recommended roles */
+:root[data-theme="light"] .match-card p,
+:root[data-theme="light"] .match-card small {
+  color: #000000 !important;
+}
+
+/* Jobs filter sidebar — "Search radius", "Employment type", "Work type", and the
+   "AI Picks · AI-recommended for your profile" pill row. These section titles
+   are inline-styled with #7c91c1 in the JSX, so we need an aggressive override. */
+:root[data-theme="light"] .resources-sidebar p,
+:root[data-theme="light"] .resources-sidebar span,
+:root[data-theme="light"] .jobs-shell .resources-sidebar p,
+:root[data-theme="light"] .jobs-shell .resources-sidebar span {
+  color: #000000 !important;
+}
+
+/* "AI-recommended for your profile" caption next to the AI Picks badge */
+:root[data-theme="light"] .jobs-content .card span {
+  color: #000000;
+}
+
+/* All section-title labels go fully black in light mode (they used the muted
+   --text-faint variable, which is now near-black but for safety force pure black). */
+:root[data-theme="light"] .section-title {
+  color: #000000 !important;
+}
+
+/* Catch-all for the last common lavender hex (#cdd9ff was missed in some places). */
+:root[data-theme="light"] [style*="#cdd9ff"]:not(.dashboard-hero *):not(.dashboard-hero) {
+  color: #000000 !important;
+}
+
+:root[data-theme="light"] .nav-links button {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .nav-links button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+:root[data-theme="light"] .nav-pill {
+  background: var(--surface-strong);
+  color: var(--text-secondary);
+}
+
+/* Buttons */
+:root[data-theme="light"] .ghost-button {
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+
+:root[data-theme="light"] .ghost-button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+:root[data-theme="light"] .primary-action,
+:root[data-theme="light"] .assessment-primary {
+  color: #ffffff;
+  background: linear-gradient(90deg, #0ea5e9, #4f46e5);
+  border: none;
+}
+
+/* Inputs */
+:root[data-theme="light"] input[type="text"],
+:root[data-theme="light"] input[type="email"],
+:root[data-theme="light"] input[type="password"],
+:root[data-theme="light"] textarea,
+:root[data-theme="light"] .jobs-input,
+:root[data-theme="light"] .resources-search {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+:root[data-theme="light"] input::placeholder,
+:root[data-theme="light"] textarea::placeholder,
+:root[data-theme="light"] .resources-search input::placeholder {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .field label,
+:root[data-theme="light"] .field span {
+  color: var(--text-secondary);
+}
+
+/* Dashboard stats */
+:root[data-theme="light"] .stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .stat-label {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .stat-value {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .stat-skill-chip {
+  background: var(--accent-soft);
+  border: 1px solid rgba(14, 165, 233, 0.2);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .stat-skill-action {
+  color: var(--accent);
+}
+
+/* Modals */
+:root[data-theme="light"] .modal-backdrop {
+  background: rgba(15, 30, 66, 0.45);
+}
+
+:root[data-theme="light"] .modal-card {
+  background: #ffffff;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+:root[data-theme="light"] .modal-tabs button {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .modal-tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Pills & filter chips */
+:root[data-theme="light"] .pill {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(14, 165, 233, 0.18);
+}
+
+:root[data-theme="light"] .pill.subtle {
+  background: rgba(91, 129, 207, 0.1);
+  color: var(--text-secondary);
+  border: 1px solid rgba(91, 129, 207, 0.18);
+}
+
+:root[data-theme="light"] .filter-chip {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .filter-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(14, 165, 233, 0.4);
+}
+
+/* Resource & track cards */
+:root[data-theme="light"] .assessment-track-card,
+:root[data-theme="light"] .resource-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .assessment-track-card p,
+:root[data-theme="light"] .resource-provider {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .assessment-track-card:hover,
+:root[data-theme="light"] .resource-card:hover {
+  border-color: rgba(14, 165, 233, 0.5);
+  box-shadow: 0 8px 24px -12px rgba(14, 165, 233, 0.25);
+}
+
+/* In light mode, drop the cyan-tinted accent on the Unknown card so it matches
+   the other seven track cards. The compass icon alone differentiates it from
+   the field-specific tracks; the special gradient was making it look out of
+   place against the otherwise-uniform white cards. */
+:root[data-theme="light"] .assessment-track-card--unknown {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+:root[data-theme="light"] .assessment-track-icon,
+:root[data-theme="light"] .resources-industry-icon {
+  background: var(--accent-soft);
+  border-color: rgba(14, 165, 233, 0.2);
+}
+
+/* Job cards */
+:root[data-theme="light"] .job-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .job-company,
+:root[data-theme="light"] .job-snippet {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .job-posted {
+  color: var(--text-faint);
+}
+
+/* Assessment summary specifics */
+:root[data-theme="light"] .breakdown-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+:root[data-theme="light"] .question-review-row {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-soft);
+}
+
+/* Chat */
+:root[data-theme="light"] .chat-message.user {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .chat-message.assistant {
+  background: var(--surface-strong);
+  color: var(--text-primary);
+}
+
+/* Resume upload dropzone */
+:root[data-theme="light"] .upload-dropzone {
+  background: var(--surface-strong);
+  border: 2px dashed var(--border);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .upload-dropzone.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Maturity badge / accent details we want kept readable on light */
+:root[data-theme="light"] .maturity-badge {
+  color: var(--accent);
+}
+
+/* Stage indicator chips on the assessment */
+:root[data-theme="light"] .assessment-stage-indicator {
+  background: rgba(91, 129, 207, 0.1);
+}
+
+:root[data-theme="light"] .assessment-stage-indicator span,
+:root[data-theme="light"] .assessment-stage-indicator button {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .assessment-stage-indicator span.active,
+:root[data-theme="light"] .assessment-stage-indicator button.active {
+  color: var(--text-primary);
+  background: linear-gradient(90deg, rgba(14, 165, 233, 0.25), rgba(99, 102, 241, 0.25));
+}
+
+/* ----- Hero (dashboard) — keep light text because the video background is fixed dark ----- */
+/* The wave video at the top of the dashboard is part of the brand identity and we can't
+   re-colour it for light theme. Force the text on top of it to stay readable (white-ish)
+   regardless of theme so "Welcome back, …" and the metric labels don't disappear. */
+:root[data-theme="light"] .dashboard-hero {
+  color: #f4fbff;
+}
+
+:root[data-theme="light"] .dashboard-hero h2,
+:root[data-theme="light"] .dashboard-hero h3,
+:root[data-theme="light"] .dashboard-hero p,
+:root[data-theme="light"] .dashboard-hero .hero-text,
+:root[data-theme="light"] .dashboard-hero .hero-text h2,
+:root[data-theme="light"] .dashboard-hero .hero-text p,
+:root[data-theme="light"] .dashboard-hero .hero-metric,
+:root[data-theme="light"] .dashboard-hero .hero-metric-label,
+:root[data-theme="light"] .dashboard-hero .hero-score {
+  color: #f4fbff !important;
+}
+
+:root[data-theme="light"] .dashboard-hero .status-pill {
+  color: #54f1c5 !important;
+  background: rgba(84, 241, 197, 0.12);
+}
+
+:root[data-theme="light"] .dashboard-hero a,
+:root[data-theme="light"] .dashboard-hero button {
+  color: #f4fbff;
+}
+
+/* ----- Quick Actions sidebar — gradient pill buttons with washed-out text in light mode ----- */
+:root[data-theme="light"] .quick-action {
+  background: linear-gradient(135deg, #0ea5e9, #4f46e5);
+  color: #ffffff;
+  border: none;
+}
+
+:root[data-theme="light"] .quick-action span,
+:root[data-theme="light"] .quick-action small {
+  color: #ffffff !important;
+}
+
+:root[data-theme="light"] .quick-action.primary {
+  background: linear-gradient(135deg, #06b6d4, #4f46e5);
+}
+
+/* ----- Analysis card body — must be readable on the white surface ----- */
+:root[data-theme="light"] .analysis-copy,
+:root[data-theme="light"] .analysis-copy p,
+:root[data-theme="light"] .analysis-copy li,
+:root[data-theme="light"] .analysis-copy strong {
+  color: var(--text-primary) !important;
+}
+
+:root[data-theme="light"] .analysis-copy h2,
+:root[data-theme="light"] .analysis-copy h3,
+:root[data-theme="light"] .analysis-copy h4 {
+  color: var(--text-primary) !important;
+}
+
+:root[data-theme="light"] details.analysis summary strong {
+  color: var(--text-primary);
+}
+
+/* ----- AI Career Coach sidebar — keep readable on light surface ----- */
+:root[data-theme="light"] .chat-panel,
+:root[data-theme="light"] .chat-panel h4,
+:root[data-theme="light"] .chat-panel p {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .chat-panel .section-title {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .chat-empty {
+  background: var(--surface-strong);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .chat-empty li {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="light"] .chat-input textarea {
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+:root[data-theme="light"] .chat-input textarea::placeholder {
+  color: var(--text-faint);
+}
+
+/* ----- Stat tile meta lines (e.g. "Strong profile", "Based on your resume") ----- */
+:root[data-theme="light"] .trend-positive {
+  color: #0d9b73;
+}
+
+/* ----- Skills Found chips — the dark-mode purple looked washed out on light bg ----- */
+:root[data-theme="light"] .stat-skill-chip {
+  background: rgba(14, 165, 233, 0.12);
+  border-color: rgba(14, 165, 233, 0.25);
+  color: var(--text-primary);
+}
+
+/* ----- Progress Track card / sidebar text ----- */
+:root[data-theme="light"] .progress-section,
+:root[data-theme="light"] .progress-row,
+:root[data-theme="light"] .progress-row span {
+  color: var(--text-primary);
+}
+
+/* ----- Resume analysis result cards & recommended-role cards: borders only ----- */
+/* User feedback: the dark backgrounds inherited from dark-mode look like floating
+   "holes" on the light theme. Replace with a clean white-ish background so they
+   read as cards on the light surface; the existing borders keep them defined. */
+:root[data-theme="light"] .result-card,
+:root[data-theme="light"] .result-card.success,
+:root[data-theme="light"] .result-card.analysis,
+:root[data-theme="light"] details.result-card.analysis,
+:root[data-theme="light"] .match-card {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .match-card strong,
+:root[data-theme="light"] .match-card p {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .match-card p {
+  color: var(--text-secondary) !important;
+}
+
+:root[data-theme="light"] .result-card.success {
+  border-color: rgba(63, 203, 155, 0.5);
+}
+
+:root[data-theme="light"] .result-card .result-title strong {
+  color: var(--text-primary);
+}
+
+/* ----- Assessment question rows: borders only on light theme ----- */
+:root[data-theme="light"] .assessment-question-list li {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .assessment-question-list li p,
+:root[data-theme="light"] .question-header p {
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .rating-hint {
+  color: var(--text-faint);
+}
+
+/* Rating buttons: keep them white-on-white-with-border so they read as buttons,
+   not as dark holes. Selected state keeps the cyan gradient. */
+:root[data-theme="light"] .rating-scale button {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+:root[data-theme="light"] .rating-scale button:hover {
+  background: var(--accent-soft);
+  border-color: rgba(14, 165, 233, 0.4);
+}
+
+:root[data-theme="light"] .question-index {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Display-tab toggle styles (used in the Settings modal) */
+.display-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+
+.display-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.display-toggle-label strong {
+  color: var(--text-primary);
+}
+
+.display-toggle-label small {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+
+/* Switch */
+.theme-switch {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.theme-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.theme-switch-slider {
+  position: absolute;
+  inset: 0;
+  background: rgba(91, 129, 207, 0.4);
+  border-radius: 999px;
+  transition: background 150ms ease;
+  cursor: pointer;
+}
+
+.theme-switch-slider::before {
+  content: '';
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  top: 3px;
+  background: #ffffff;
+  border-radius: 50%;
+  transition: transform 150ms ease;
+}
+
+.theme-switch input:checked + .theme-switch-slider {
+  background: var(--accent);
+}
+
+.theme-switch input:checked + .theme-switch-slider::before {
+  transform: translateX(22px);
 }

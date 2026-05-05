@@ -33,7 +33,8 @@ public class JSearchClient
         int page = 1,
         bool remoteOnly = false,
         string? employmentType = null,
-        string? location = null)
+        string? location = null,
+        int? radiusMiles = null)
     {
         var apiKey = Environment.GetEnvironmentVariable("JSEARCH_API_KEY") ?? "";
         if (string.IsNullOrEmpty(apiKey))
@@ -46,7 +47,17 @@ public class JSearchClient
         var locationSuffix = !string.IsNullOrWhiteSpace(location) && !remoteOnly ? $" in {location}" : "";
         var qs = $"query={Uri.EscapeDataString(query + locationSuffix)}&page={page}&num_pages=1";
         if (!string.IsNullOrWhiteSpace(location) && !remoteOnly)
-            qs += "&radius=161"; // ~100 miles in km
+        {
+            // radiusMiles == null  -> 100 mi default (preserves prior behavior)
+            // radiusMiles <= 0     -> "anywhere", omit radius so JSearch returns nationwide results
+            // radiusMiles > 0      -> convert miles to km (1 mi ≈ 1.609 km)
+            var miles = radiusMiles ?? 100;
+            if (miles > 0)
+            {
+                var km = (int)Math.Round(miles * 1.609);
+                qs += $"&radius={km}";
+            }
+        }
         if (remoteOnly) qs += "&remote_jobs_only=true";
         if (!string.IsNullOrEmpty(employmentType))
             qs += $"&employment_types={Uri.EscapeDataString(employmentType)}";

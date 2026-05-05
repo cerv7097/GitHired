@@ -65,7 +65,10 @@ export default function Login({ onLogin }: Props) {
       }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error ?? data.detail ?? data.title ?? 'Something went wrong. Please try again.');
+        // Only surface server-supplied messages from `error` (which we control).
+        // Never display `detail` or `title` directly — they can come from the framework's
+        // problem-details response and may leak infrastructure information.
+        setError(data.error ?? 'Something went wrong. Please try again.');
         return;
       }
 

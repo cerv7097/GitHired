@@ -471,12 +471,14 @@ public class Db {
   {
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
+    // IMPORTANT: do NOT update profile.updated_at here. Same reason as LogSearchQueryAsync —
+    // taking an assessment doesn't change which jobs match the user, so it shouldn't
+    // invalidate the recommendation cache.
     var sql = """
-      INSERT INTO user_profiles (user_id, assessment_scores, updated_at)
-      VALUES (@uid, jsonb_build_object(@role::text, @score::int), NOW())
+      INSERT INTO user_profiles (user_id, assessment_scores)
+      VALUES (@uid, jsonb_build_object(@role::text, @score::int))
       ON CONFLICT (user_id) DO UPDATE SET
-        assessment_scores = user_profiles.assessment_scores || jsonb_build_object(@role::text, @score::int),
-        updated_at = NOW();
+        assessment_scores = user_profiles.assessment_scores || jsonb_build_object(@role::text, @score::int);
       """;
     await using var cmd = new NpgsqlCommand(sql, con);
     cmd.Parameters.AddWithValue("uid", userId);
@@ -490,12 +492,15 @@ public class Db {
     await using var con = new NpgsqlConnection(_cs);
     await con.OpenAsync();
     var entry = JsonSerializer.Serialize(new { query, timestamp = DateTime.UtcNow.ToString("O") });
+    // IMPORTANT: do NOT update profile.updated_at here. The recommendation cache uses
+    // updated_at to decide whether cached results are still valid — and "the user did
+    // a job search" should not invalidate those recommendations. Only resume changes
+    // (UpsertUserProfileAsync, UpdateAtsScoreAsync) bump updated_at.
     var sql = """
-      INSERT INTO user_profiles (user_id, search_history, updated_at)
-      VALUES (@uid, jsonb_build_array(@entry::jsonb), NOW())
+      INSERT INTO user_profiles (user_id, search_history)
+      VALUES (@uid, jsonb_build_array(@entry::jsonb))
       ON CONFLICT (user_id) DO UPDATE SET
-        search_history = user_profiles.search_history || jsonb_build_array(@entry::jsonb),
-        updated_at = NOW();
+        search_history = user_profiles.search_history || jsonb_build_array(@entry::jsonb);
       """;
     await using var cmd = new NpgsqlCommand(sql, con);
     cmd.Parameters.AddWithValue("uid", userId);

@@ -15,20 +15,34 @@ public class AdzunaClient
         string query,
         string? location = null,
         bool remoteOnly = false,
-        int page = 1)
+        int page = 1,
+        int? radiusMiles = null)
     {
         var appId = Environment.GetEnvironmentVariable("ADZUNA_APP_ID") ?? "";
         var appKey = Environment.GetEnvironmentVariable("ADZUNA_APP_KEY") ?? "";
         if (string.IsNullOrEmpty(appId) || string.IsNullOrEmpty(appKey))
             return new JobSearchResult(0, Array.Empty<JobResult>());
 
+        // Adzuna bills per HTTP request, not per result, so requesting up to 25 results
+        // per call is free in terms of quota. Bumping from 10 to 25 widens the pool we
+        // can dedupe + filter against. Per their docs the cap is 50; 25 leaves room
+        // without risking a quirky tier limit on some plans.
         var qs = $"app_id={Uri.EscapeDataString(appId)}&app_key={Uri.EscapeDataString(appKey)}" +
-                 $"&results_per_page=10&what={Uri.EscapeDataString(query)}";
+                 $"&results_per_page=25&what={Uri.EscapeDataString(query)}";
 
         if (!string.IsNullOrEmpty(location) && !remoteOnly)
         {
             qs += $"&where={Uri.EscapeDataString(location)}";
-            qs += "&distance=161"; // ~100 miles in km
+
+            // radiusMiles == null  -> 100 mi default (preserves prior behavior)
+            // radiusMiles <= 0     -> "anywhere", omit distance so Adzuna returns nationwide results
+            // radiusMiles > 0      -> convert miles to km
+            var miles = radiusMiles ?? 100;
+            if (miles > 0)
+            {
+                var km = (int)Math.Round(miles * 1.609);
+                qs += $"&distance={km}";
+            }
         }
 
         var http = _factory.CreateClient();

@@ -33,14 +33,16 @@ public class ResumeParser
                 _       => throw new NotSupportedException($"File type '{extension}' is not supported. Please upload PDF, DOCX, or DOC.")
             };
 
+            var wordCount = CountWords(text);
             return new ResumeParseResult
             {
-                Success       = true,
-                Text          = text,
-                WordCount     = CountWords(text),
-                CharacterCount = text.Length,
-                FileName      = fileName,
-                FileType      = extension
+                Success              = true,
+                Text                 = text,
+                WordCount            = wordCount,
+                CharacterCount       = text.Length,
+                FileName             = fileName,
+                FileType             = extension,
+                ExtractionConfidence = AssessExtractionConfidence(text, wordCount)
             };
         }
         catch (Exception ex)
@@ -57,59 +59,118 @@ public class ResumeParser
 
     private async Task<string> ParsePdfAsync(Stream stream)
     {
+        // Run PDF extractors in priority order and short-circuit when one of them returns
+        // a clearly-clean result. This avoids spending time on the slower fallbacks
+        // (Swift subprocess + PdfPig + iText each cost real wall time) for the common
+        // case of a healthy text-based PDF resume.
         var candidates = new List<(string Source, string Text)>();
 
-        stream.Position = 0;
+        bool TryAccept(string source, string? extracted)
+        {
+            if (string.IsNullOrWhiteSpace(extracted)) return false;
+            candidates.Add((source, extracted));
+            Console.WriteLine($"[PDF_PARSE] source={source} words={CountWords(extracted)} chars={extracted.Length}");
+            return IsHighQualityExtraction(extracted);
+        }
+
+        // 1. macOS PDFKit (highest fidelity for native text PDFs).
         if (OperatingSystem.IsMacOS())
         {
+            stream.Position = 0;
             var nativeText = await TryExtractPdfTextWithPdfKitAsync(stream);
-            if (!string.IsNullOrWhiteSpace(nativeText))
-                candidates.Add(("pdfkit", nativeText));
-        }
-
-        stream.Position = 0;
-        var text = new StringBuilder();
-        using (var document = UglyToad.PdfPig.PdfDocument.Open(stream))
-        {
-            foreach (var page in document.GetPages())
+            if (TryAccept("pdfkit", nativeText))
             {
-                var pageText = page.Text;
-                if (!string.IsNullOrWhiteSpace(pageText))
-                    text.AppendLine(pageText);
+                Console.WriteLine("[PDF_PARSE] short-circuit after pdfkit (high quality)");
+                return nativeText!;
             }
         }
 
-        var extracted = CleanupExtractedText(text.ToString());
-        if (!string.IsNullOrWhiteSpace(extracted))
-            candidates.Add(("pdfpig", extracted));
-
-        stream.Position = 0;
-        var fallbackText = new StringBuilder();
-        using (var fallbackReader = new PdfReader(stream))
+        // 2. PdfPig (cross-platform, decent quality).
+        try
         {
-            for (var page = 1; page <= fallbackReader.NumberOfPages; page++)
+            stream.Position = 0;
+            var text = new StringBuilder();
+            using (var document = UglyToad.PdfPig.PdfDocument.Open(stream))
             {
-                var pageBytes = fallbackReader.GetPageContent(page);
-                if (pageBytes != null)
-                    fallbackText.AppendLine(ExtractTextFromPdfContent(pageBytes));
+                foreach (var page in document.GetPages())
+                {
+                    var pageText = page.Text;
+                    if (!string.IsNullOrWhiteSpace(pageText))
+                        text.AppendLine(pageText);
+                }
+            }
+
+            var extracted = CleanupExtractedText(text.ToString());
+            if (TryAccept("pdfpig", extracted))
+            {
+                Console.WriteLine("[PDF_PARSE] short-circuit after pdfpig (high quality)");
+                return extracted;
             }
         }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PDF_PARSE] pdfpig failed: {ex.Message}");
+        }
 
-        var fallback = CleanupExtractedText(fallbackText.ToString());
-        if (!string.IsNullOrWhiteSpace(fallback))
-            candidates.Add(("itext-fallback", fallback));
+        // 3. iText fallback — content-stream parsing for stubborn PDFs that the higher
+        // level extractors can't crack. We only run this if the prior candidates didn't
+        // pass the quality bar.
+        try
+        {
+            stream.Position = 0;
+            var fallbackText = new StringBuilder();
+            using (var fallbackReader = new PdfReader(stream))
+            {
+                for (var page = 1; page <= fallbackReader.NumberOfPages; page++)
+                {
+                    var pageBytes = fallbackReader.GetPageContent(page);
+                    if (pageBytes != null)
+                        fallbackText.AppendLine(ExtractTextFromPdfContent(pageBytes));
+                }
+            }
+
+            var fallback = CleanupExtractedText(fallbackText.ToString());
+            TryAccept("itext-fallback", fallback);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[PDF_PARSE] itext-fallback failed: {ex.Message}");
+        }
 
         if (candidates.Count == 0)
             return string.Empty;
 
-        foreach (var candidate in candidates)
-        {
-            Console.WriteLine($"[PDF_PARSE] source={candidate.Source} words={CountWords(candidate.Text)} chars={candidate.Text.Length}");
-        }
-
         var selected = SelectBestPdfExtraction(candidates);
         Console.WriteLine($"[PDF_PARSE] selected={selected.Source} words={CountWords(selected.Text)} chars={selected.Text.Length}");
         return selected.Text;
+    }
+
+    /// <summary>
+    /// Returns true when the extracted text looks clean enough that running additional
+    /// extractors won't meaningfully improve on it. Tuned conservatively so we keep
+    /// trying when the first extractor returns sparse or junk text.
+    /// </summary>
+    private static bool IsHighQualityExtraction(string text)
+    {
+        var words = CountWords(text);
+        if (words < 200) return false; // small resumes tend to have layout quirks worth double-checking
+
+        var nonEmptyLines = text.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToArray();
+        if (nonEmptyLines.Length == 0) return false;
+
+        var normalizedLines = nonEmptyLines
+            .Select(l => Regex.Replace(l.ToLowerInvariant(), @"\s+", " "))
+            .ToArray();
+        var uniqueLineRatio = normalizedLines.Distinct(StringComparer.Ordinal).Count() / (double)normalizedLines.Length;
+        if (uniqueLineRatio < 0.85) return false; // duplicate-line artifact is a known PdfPig failure mode
+
+        var spacedWordArtifacts = Regex.Matches(text, @"(?<![\p{L}\p{N}])(?:[\p{L}\p{N}]\s+){3,}[\p{L}\p{N}](?![\p{L}\p{N}])").Count;
+        if (spacedWordArtifacts > words * 0.02) return false; // letter-spaced words ("E x p e r i e n c e")
+
+        return true;
     }
 
     private Task<string> ParseDocxAsync(Stream stream)
@@ -601,6 +662,45 @@ print(pages.joined(separator: "\n\n"))
             m => Regex.Replace(m.Value, @"\s+", ""));
     }
 
+    /// <summary>
+    /// Returns "high" / "medium" / "low" describing how confident the parser is that
+    /// the extracted text is a faithful representation of the original resume. The
+    /// downstream ATS scoring tool uses this to avoid penalizing a clean resume that
+    /// happened to extract poorly (e.g. an image-based PDF).
+    /// </summary>
+    private static string AssessExtractionConfidence(string text, int wordCount)
+    {
+        if (string.IsNullOrWhiteSpace(text) || wordCount < 30) return "low";
+
+        var nonEmptyLines = text.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToArray();
+        if (nonEmptyLines.Length == 0) return "low";
+
+        var normalizedLines = nonEmptyLines
+            .Select(l => Regex.Replace(l.ToLowerInvariant(), @"\s+", " "))
+            .ToArray();
+        var uniqueLineRatio = normalizedLines.Distinct(StringComparer.Ordinal).Count() / (double)normalizedLines.Length;
+
+        // Count how many canonical resume section headings appear. A clean parse usually
+        // surfaces at least Experience + Education + Skills.
+        string[] sectionKeywords =
+        {
+            "experience", "work history", "employment",
+            "education", "academic",
+            "skills", "technical skills", "competencies",
+            "projects", "summary", "objective", "profile",
+            "certifications", "awards", "contact"
+        };
+        var lowerText = text.ToLowerInvariant();
+        var sectionHits = sectionKeywords.Count(kw => lowerText.Contains(kw));
+
+        if (wordCount >= 250 && uniqueLineRatio >= 0.85 && sectionHits >= 3) return "high";
+        if (wordCount >= 100 && uniqueLineRatio >= 0.7 && sectionHits >= 1) return "medium";
+        return "low";
+    }
+
     private static string RemoveConsecutiveDuplicateLines(string input)
     {
         var lines = input.Split('\n');
@@ -631,11 +731,18 @@ print(pages.joined(separator: "\n\n"))
 
 public class ResumeParseResult
 {
-    public bool    Success        { get; set; }
-    public string  Text           { get; set; } = "";
-    public string? ErrorMessage   { get; set; }
-    public int     WordCount      { get; set; }
-    public int     CharacterCount { get; set; }
-    public string  FileName       { get; set; } = "";
-    public string  FileType       { get; set; } = "";
+    public bool    Success              { get; set; }
+    public string  Text                 { get; set; } = "";
+    public string? ErrorMessage         { get; set; }
+    public int     WordCount            { get; set; }
+    public int     CharacterCount       { get; set; }
+    public string  FileName             { get; set; } = "";
+    public string  FileType             { get; set; } = "";
+
+    /// <summary>
+    /// "high" / "medium" / "low" — how reliable the parser believes the extracted text
+    /// is. Surfaced to the ATS analysis tool so the LLM can soften its critique when
+    /// the underlying extraction is weak (e.g. image-based or heavily formatted PDFs).
+    /// </summary>
+    public string  ExtractionConfidence { get; set; } = "medium";
 }

@@ -57,6 +57,12 @@ CRITICAL RULES:
 - If a keyword already appears in the resume, do NOT list it as missing.
 - Do not use generic template advice. Every issue and recommendation must be grounded in what you actually read.
 
+PARSER CONTEXT HANDLING:
+- The parser diagnostics block may include an `extraction_confidence` of high, medium, or low.
+- When extraction_confidence is `low`, the resume may be image-based or heavily formatted. Do NOT flag missing sections (Experience, Education, Skills, etc.) unless you can clearly tell they are absent — they may simply have failed to extract. Set analysis_confidence to `low` and mention extraction quality in the summary.
+- When extraction_confidence is `medium`, give the resume the benefit of the doubt on borderline issues and set analysis_confidence to at most `medium`.
+- When extraction_confidence is `high`, score normally.
+
 SCORING CRITERIA (0-100):
 1. FORMATTING (20 pts) — clean layout, standard headings, no tables/graphics trapping text
 2. CONTACT INFORMATION (15 pts) — name, phone, email, location, LinkedIn/portfolio

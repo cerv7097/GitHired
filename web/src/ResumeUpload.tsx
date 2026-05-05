@@ -133,12 +133,32 @@ function inlineFormat(text: string): React.ReactNode {
   );
 }
 
+// localStorage key for the most recent analysis. Scoped per user so different
+// accounts on the same browser don't see each other's results.
+const STORED_RESULT_KEY = (userId: string) => `resumeAnalysis:${userId}`;
+
+function loadStoredResult(userId: string): UploadResponse | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORED_RESULT_KEY(userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as UploadResponse;
+    if (parsed && parsed.parse_result && parsed.agent_analysis) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, onUploadStart, onUploadSuccess }: ResumeUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [targetRole, setTargetRole] = useState('');
   const [targetIndustry, setTargetIndustry] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<UploadResponse | null>(null);
+  // Seed from localStorage so the analysis is still visible after a tab switch,
+  // page refresh, or re-login. Cleared by uploading a new resume (which replaces
+  // the stored value below).
+  const [result, setResult] = useState<UploadResponse | null>(() => loadStoredResult(userId));
   const [error, setError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -202,6 +222,13 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, on
 
       const data: UploadResponse = await response.json();
       setResult(data);
+      // Persist so the analysis survives tab navigation and re-logins.
+      try {
+        window.localStorage.setItem(STORED_RESULT_KEY(userId), JSON.stringify(data));
+      } catch {
+        // Quota exceeded or storage disabled — non-fatal, the analysis is
+        // still visible in this session.
+      }
       onUploadSuccess?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload resume');
@@ -220,14 +247,6 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, on
     if (score >= 80) return '#54f1c5';
     if (score >= 60) return '#f9a826';
     return '#fb7185';
-  };
-
-  const formatJson = (payload: string) => {
-    try {
-      return JSON.stringify(JSON.parse(payload), null, 2);
-    } catch {
-      return payload;
-    }
   };
 
   const atsScore = extractAtsScore(result);
@@ -347,35 +366,26 @@ export default function ResumeUpload({ userId = 'user-123', onAtsScoreUpdate, on
             </div>
           )}
 
-          <div className="result-card analysis">
-            <div className="result-title">
+          {/* The analysis is wrapped in <details open> so users can collapse it
+              when they want a cleaner dashboard but it's always available to
+              re-open. State persists in localStorage (see loadStoredResult /
+              the upload handler), so the section survives tab switches and
+              re-logins.
+              The previous "Tool Results" accordion was removed — it exposed
+              internal tool names and raw arguments/results which aren't meant
+              for end users to see. */}
+          <details className="result-card analysis" open>
+            <summary className="analysis-summary">
               <strong>AI Analysis & Recommendations</strong>
-            </div>
+              {/* Empty — the hint label is driven entirely by CSS so it
+                  swaps between "click to expand" / "click to collapse"
+                  based on the parent <details>[open] state. */}
+              <span className="analysis-summary-hint" />
+            </summary>
             <div className="analysis-copy">
               {renderMarkdown(result.agent_analysis.message)}
             </div>
-
-            <details className="tool-accordion">
-              <summary>
-                Tool Results ({result.agent_analysis.tools_used.length})
-              </summary>
-              {result.agent_analysis.tools_used.map((tool, idx) => (
-                <details key={idx}>
-                  <summary>{tool.toolName}</summary>
-                  <div className="tool-details">
-                    <div>
-                      <strong>Arguments</strong>
-                      <pre>{formatJson(tool.arguments)}</pre>
-                    </div>
-                    <div>
-                      <strong>Result</strong>
-                      <pre>{formatJson(tool.result)}</pre>
-                    </div>
-                  </div>
-                </details>
-              ))}
-            </details>
-          </div>
+          </details>
         </div>
       )}
     </div>

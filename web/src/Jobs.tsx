@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface JobResult {
   title: string;
@@ -30,7 +30,16 @@ const EMPLOYMENT_TYPES = [
   { label: 'Internship', value: 'INTERN' }
 ];
 
+const SEARCH_RADIUS_OPTIONS = [
+  { label: '25 miles', value: 25 },
+  { label: '50 miles', value: 50 },
+  { label: '100 miles', value: 100 },
+  { label: '200 miles', value: 200 },
+  { label: 'Anywhere', value: 0 }
+];
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+const PAGE_SIZE = 10;
 
 function formatSalary(job: JobResult): string | null {
   if (!job.minSalary && !job.maxSalary) return null;
@@ -47,12 +56,23 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
   const [location, setLocation] = useState(defaultLocation ?? '');
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [employmentType, setEmploymentType] = useState('');
+  const [radius, setRadius] = useState<number>(100);
   const [page, setPage] = useState(1);
   const [allJobs, setAllJobs] = useState<JobResult[]>(initialJobs ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState((initialJobs?.length ?? 0) > 0);
   const [searchLabel, setSearchLabel] = useState<string | null>(initialLabel ?? null);
+
+  // Tracks whether we've already seeded the location field from the user's resume.
+  // We seed once when defaultLocation first becomes available; after that the user is
+  // free to clear the input or type a new location without it being silently restored.
+  const locationSeededRef = useRef(false);
+
+  // Used to skip the radius-change auto-refetch on the very first render. Without this,
+  // changing the default radius value at mount would fire a search before the user has
+  // typed a query.
+  const isInitialRadiusRender = useRef(true);
 
   useEffect(() => {
     if (!userId && (initialJobs?.length ?? 0) > 0) {
@@ -63,7 +83,14 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
   }, [initialJobs, initialLabel, userId]);
 
   useEffect(() => {
-    if (defaultLocation && !location) setLocation(defaultLocation);
+    if (locationSeededRef.current) return;
+    if (defaultLocation && !location) {
+      setLocation(defaultLocation);
+      locationSeededRef.current = true;
+    } else if (location) {
+      // User typed before defaultLocation arrived — don't seed later.
+      locationSeededRef.current = true;
+    }
   }, [defaultLocation, location]);
 
   useEffect(() => {
@@ -99,6 +126,23 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
     };
   }, [userId, initialLabel]);
 
+  // Auto re-run the search when the user changes the radius (e.g. switching from
+  // 100 mi → Anywhere should immediately repopulate the list, instead of forcing
+  // them to click "Search Jobs" again). Skipped on initial mount, and skipped if
+  // the user hasn't searched yet (otherwise we'd surface a generic feed unprompted).
+  useEffect(() => {
+    if (isInitialRadiusRender.current) {
+      isInitialRadiusRender.current = false;
+      return;
+    }
+    if (!hasSearched) return;
+    // Don't refetch if the radius dropdown isn't actually in effect (no location, or
+    // remote-only is on) — radius is ignored server-side in those cases anyway.
+    if (remoteOnly || !location.trim()) return;
+    search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [radius]);
+
   // Client-side filtering — no new API call needed
   const filteredJobs = allJobs.filter(job => {
     if (remoteOnly && !job.isRemote) return false;
@@ -109,27 +153,32 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
     return true;
   });
 
-  async function search(pageNum = 1) {
+  const totalPages = Math.max(1, Math.ceil(filteredJobs.length / PAGE_SIZE));
+  const pagedJobs = filteredJobs.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  async function search() {
     setLoading(true);
     setError(null);
     setHasSearched(true);
     setSearchLabel(null);
+    setPage(1);
 
     try {
       const params = new URLSearchParams({
         query: query.trim() || 'software engineer',
         location: location.trim(),
-        page: String(pageNum),
         remoteOnly: String(remoteOnly),
         ...(employmentType ? { employmentType } : {}),
         ...(userId ? { userId } : {}),
+        // Only send radius when a location is set and we're not in remote-only mode.
+        // 0 = "Anywhere" (no distance cap).
+        ...(!remoteOnly && location.trim() ? { radius: String(radius) } : {}),
       });
 
       const res = await fetch(`${API_BASE}/api/jobs/search?${params}`);
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data: JobSearchResponse = await res.json();
       setAllJobs(data.jobs);
-      setPage(pageNum);
     } catch {
       setError('Could not load jobs. Make sure your JSEARCH_API_KEY is set and the API is running.');
     } finally {
@@ -139,7 +188,7 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    search(1);
+    search();
   }
 
   return (
@@ -164,14 +213,44 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
               value={query}
               onChange={e => setQuery(e.target.value)}
             />
-            <input
-              type="text"
-              className="jobs-input"
-              placeholder="Location (e.g. Austin TX) or leave blank"
-              value={location}
-              onChange={e => setLocation(e.target.value)}
-              disabled={remoteOnly}
-            />
+            <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+              <input
+                type="text"
+                className="jobs-input"
+                placeholder="Location (e.g. Austin TX) or leave blank"
+                value={location}
+                onChange={e => setLocation(e.target.value)}
+                disabled={remoteOnly}
+                style={{ flex: 1, paddingRight: location ? 32 : undefined }}
+              />
+              {location && !remoteOnly && (
+                <button
+                  type="button"
+                  aria-label="Clear location"
+                  title="Clear location"
+                  onClick={() => {
+                    setLocation('');
+                    // Mark as seeded so defaultLocation won't refill it after clearing.
+                    locationSeededRef.current = true;
+                  }}
+                  style={{
+                    position: 'absolute',
+                    right: 8,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#9db7ff',
+                    cursor: 'pointer',
+                    fontSize: '1.1rem',
+                    lineHeight: 1,
+                    padding: 4
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
           <button type="submit" className="primary-action jobs-search-btn" disabled={loading}>
             {loading ? 'Searching…' : 'Search Jobs'}
@@ -204,6 +283,29 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
 
             <div>
               <p style={{ fontSize: '0.8rem', color: '#7c91c1', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 10 }}>
+                Search radius
+              </p>
+              <div className="filter-chips">
+                {SEARCH_RADIUS_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={`filter-chip ${radius === opt.value ? 'active' : ''}`}
+                    onClick={() => setRadius(opt.value)}
+                    aria-pressed={radius === opt.value}
+                    disabled={remoteOnly || !location.trim()}
+                    title={remoteOnly || !location.trim()
+                      ? 'Set a location (and turn off Remote only) to filter by radius'
+                      : undefined}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p style={{ fontSize: '0.8rem', color: '#7c91c1', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 10 }}>
                 Employment type
               </p>
               <div className="filter-chips">
@@ -225,7 +327,7 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
           {hasSearched && allJobs.length > 0 && (
             <div className="industry-insight" style={{ marginTop: 8 }}>
               <div className="industry-signal">{filteredJobs.length} results</div>
-              <p>{filteredJobs.length < allJobs.length ? `Filtered from ${allJobs.length} total` : `Page ${page}`}</p>
+              <p>{filteredJobs.length < allJobs.length ? `Filtered from ${allJobs.length} total` : `Page ${page} of ${totalPages}`}</p>
             </div>
           )}
         </aside>
@@ -274,7 +376,7 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
                 </div>
               )}
               <div className="jobs-list">
-                {filteredJobs.map((job, i) => {
+                {pagedJobs.map((job, i) => {
                   const salary = formatSalary(job);
                   return (
                     <div className="card job-card" key={`${job.company}-${job.title}-${i}`}>
@@ -331,16 +433,16 @@ export default function Jobs({ userId, initialJobs, initialLabel, defaultLocatio
                   type="button"
                   className="ghost-button"
                   disabled={page <= 1}
-                  onClick={() => search(page - 1)}
+                  onClick={() => setPage(p => p - 1)}
                 >
                   ← Previous
                 </button>
-                <span className="jobs-page-indicator">Page {page}</span>
+                <span className="jobs-page-indicator">Page {page} of {totalPages}</span>
                 <button
                   type="button"
                   className="ghost-button"
-                  disabled={allJobs.length < 10}
-                  onClick={() => search(page + 1)}
+                  disabled={page >= totalPages}
+                  onClick={() => setPage(p => p + 1)}
                 >
                   Next →
                 </button>

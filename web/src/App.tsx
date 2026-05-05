@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import AgentChat from './AgentChat';
-import Assessment from './Assessment';
+import Assessment, { TRACK_ICONS } from './Assessment';
 import Jobs from './Jobs';
 import ResumeUpload from './ResumeUpload';
 import type { User } from './Login';
@@ -26,6 +26,7 @@ interface RecommendedJob {
 interface MatchedOn {
   roles: string[];
   skills: string[];
+  tools?: string[];
   experienceLevel: string;
   atsScore?: number | null;
   searchQueries?: string[];
@@ -87,9 +88,38 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
   const chatSectionRef = useRef<HTMLDivElement | null>(null);
   const [atsScore, setAtsScore] = useState<number | null>(() => loadStoredAtsScore(user.id));
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  // Bumped every time the user clicks the "Assessment" item in the top nav. Passed as
+  // a `key` to <Assessment />, which forces React to remount it — so clicking the
+  // Assessment tab while already viewing the summary sends the user back to the
+  // track selection screen, no scrolling required.
+  const [assessmentNonce, setAssessmentNonce] = useState(0);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'password' | 'email'>('password');
+  const [settingsTab, setSettingsTab] = useState<'password' | 'email' | 'display'>('password');
+
+  // Theme — persisted in localStorage scoped to the user. Applied to <html> via
+  // the data-theme attribute, which the CSS variable system in index.css reads
+  // to swap colors across all pages.
+  const themeStorageKey = `theme:${user.id}`;
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    const stored = window.localStorage.getItem(themeStorageKey);
+    return stored === 'light' ? 'light' : 'dark';
+  });
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (theme === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    try {
+      window.localStorage.setItem(themeStorageKey, theme);
+    } catch {
+      // Storage unavailable — preference still applies in this session.
+    }
+  }, [theme, themeStorageKey]);
 
   // Change Password state
   const [cpCurrent, setCpCurrent] = useState('');
@@ -107,7 +137,7 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
   const [ceError, setCeError] = useState<string | null>(null);
   const [ceSuccess, setCeSuccess] = useState<string | null>(null);
 
-  function openSettings(tab: 'password' | 'email') {
+  function openSettings(tab: 'password' | 'email' | 'display') {
     setSettingsTab(tab);
     setSettingsOpen(true);
     setProfileMenuOpen(false);
@@ -193,6 +223,8 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
     }
   }
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryId | 'all'>('all');
+  const [resourceSearch, setResourceSearch] = useState('');
+  const [skillsModalOpen, setSkillsModalOpen] = useState(false);
   const [recommendations, setRecommendations] = useState<RecommendedJob[]>([]);
   const [recsLoading, setRecsLoading] = useState(false);
   const [matchedOn, setMatchedOn] = useState<MatchedOn | null>(null);
@@ -889,19 +921,45 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
     }
   ];
 
+  // Filter by both industry and free-text search. The search matches the title,
+  // provider, and any tag, lowercased and trimmed; empty search means no text filter.
+  const searchTokens = resourceSearch
+    .toLowerCase()
+    .split(/\s+/)
+    .map(t => t.trim())
+    .filter(t => t.length > 0);
+
   const filteredCategories = resourceCategories.map(category => ({
     ...category,
-    items:
-      selectedIndustry === 'all'
-        ? category.items
-        : category.items.filter(item => item.industries.includes(selectedIndustry))
+    items: category.items.filter(item => {
+      if (selectedIndustry !== 'all' && !item.industries.includes(selectedIndustry)) return false;
+      if (searchTokens.length === 0) return true;
+      const haystack = [item.title, item.provider, ...item.tags].join(' ').toLowerCase();
+      return searchTokens.every(token => haystack.includes(token));
+    })
   }));
 
   const totalResources = filteredCategories.reduce((sum, category) => sum + category.items.length, 0);
-  const selectedIndustryLabel =
-    selectedIndustry === 'all'
-      ? 'All industries'
-      : industryOptions.find(option => option.id === selectedIndustry)?.label ?? 'Selected industry';
+
+  // Pre-compute resource count per industry so the Assessment summary can show
+  // "Browse N resources for {track} →" without needing access to the full
+  // resource catalog.
+  const resourceCountByTrack = resourceCategories.reduce<Partial<Record<IndustryId, number>>>(
+    (counts, category) => {
+      for (const item of category.items) {
+        for (const ind of item.industries) {
+          counts[ind] = (counts[ind] ?? 0) + 1;
+        }
+      }
+      return counts;
+    },
+    {}
+  );
+
+  const handleJumpToResources = (trackId: IndustryId) => {
+    setSelectedIndustry(trackId);
+    setActiveTab('resources');
+  };
 
   const quickActions = [
     { label: 'Upload Resume', description: 'Refresh your ATS scan', accent: 'primary', action: () => scrollToSection(resumeSectionRef) },
@@ -916,6 +974,23 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
     { label: 'Resources', key: 'resources', tab: 'resources' as const }
   ];
 
+  // Merge LLM-extracted skills + tools into one list for the dashboard tile.
+  // Backend keeps them structurally separate (skills are concepts, tools are named
+  // products), but to a user looking at "Skills Found" both belong. Deduplication
+  // is case-insensitive — "Python" and "python" shouldn't both show up.
+  const allSkills = (() => {
+    if (!matchedOn) return [] as string[];
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const item of [...(matchedOn.skills ?? []), ...(matchedOn.tools ?? [])]) {
+      const key = item.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item.trim());
+    }
+    return merged;
+  })();
+
   const readinessStats = [
     {
       label: 'Resume Readiness Score',
@@ -929,8 +1004,12 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
     },
     {
       label: 'Skills Found',
-      value: matchedOn ? String(matchedOn.skills.length) : '—',
-      meta: matchedOn ? (matchedOn.skills.slice(0, 2).join(', ') || 'From resume') : 'Upload resume'
+      value: matchedOn ? String(allSkills.length) : '—',
+      meta: matchedOn ? '' : 'Upload resume',
+      // Special-cased in the render path below — when this is true, the tile is
+      // clickable and renders a chip preview + "View all" affordance instead of
+      // the standard meta text line.
+      isSkills: true as const
     }
   ];
 
@@ -979,6 +1058,13 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
   useEffect(() => {
     fetchRecommendations();
   }, [fetchRecommendations]);
+
+  // Scroll to the top of the page on any tab switch. Without this, clicking
+  // "View all" on the dashboard (or any sidebar item) leaves the browser at the
+  // previous scroll position, which lands the user mid-page on the new view.
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [activeTab]);
 
   const handleResumeUploadStart = () => {
     setRecommendations([]);
@@ -1031,7 +1117,13 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
                 key={item.key}
                 type="button"
                 className={isActive ? 'active' : ''}
-                onClick={() => setActiveTab(item.tab)}
+                onClick={() => {
+                  // Clicking the Assessment tab always resets the assessment to a
+                  // fresh "Choose Track" view, even if the user is already on the
+                  // assessment tab viewing the summary.
+                  if (item.tab === 'assessment') setAssessmentNonce(n => n + 1);
+                  setActiveTab(item.tab);
+                }}
               >
                 {item.label}
               </button>
@@ -1062,6 +1154,9 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
                 </div>
                 <button type="button" onClick={() => openSettings('password')}>Change Password</button>
                 <button type="button" onClick={() => openSettings('email')}>Change Email</button>
+                <button type="button" onClick={() => openSettings('display')}>
+                  Display {theme === 'light' ? '· Light' : '· Dark'}
+                </button>
                 <div className="profile-dropdown-divider" />
                 <button type="button" onClick={onLogout} style={{ color: '#f87171' }}>Sign Out</button>
               </div>
@@ -1122,13 +1217,48 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
 
           <div className="dashboard-grid">
             <aside className="stats-grid">
-              {readinessStats.map(stat => (
-                <div className="stat-card" key={stat.label}>
-                  <div className="stat-label">{stat.label}</div>
-                  <div className="stat-value">{stat.value}</div>
-                  <div className="trend-positive">{stat.meta}</div>
-                </div>
-              ))}
+              {readinessStats.map(stat => {
+                // The Skills Found tile is special: it's clickable when there are
+                // skills, and renders a small chip preview instead of a comma-
+                // separated meta line so the user can SEE skills at a glance.
+                const isSkillsTile = 'isSkills' in stat && stat.isSkills;
+                const previewSkills = isSkillsTile && allSkills.length > 0 ? allSkills.slice(0, 4) : [];
+                const hiddenSkillCount = isSkillsTile ? Math.max(0, allSkills.length - previewSkills.length) : 0;
+                const isClickable = isSkillsTile && allSkills.length > 0;
+
+                return (
+                  <div
+                    className={`stat-card ${isClickable ? 'stat-card-clickable' : ''}`}
+                    key={stat.label}
+                    onClick={isClickable ? () => setSkillsModalOpen(true) : undefined}
+                    role={isClickable ? 'button' : undefined}
+                    tabIndex={isClickable ? 0 : undefined}
+                    onKeyDown={isClickable ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSkillsModalOpen(true);
+                      }
+                    } : undefined}
+                  >
+                    <div className="stat-label">{stat.label}</div>
+                    <div className="stat-value">{stat.value}</div>
+                    {isSkillsTile && allSkills.length > 0 ? (
+                      <>
+                        <div className="stat-skill-chips">
+                          {previewSkills.map(skill => (
+                            <span key={skill} className="stat-skill-chip">{skill}</span>
+                          ))}
+                        </div>
+                        <div className="stat-skill-action">
+                          {hiddenSkillCount > 0 ? `+${hiddenSkillCount} more · View all →` : 'View all →'}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="trend-positive">{stat.meta}</div>
+                    )}
+                  </div>
+                );
+              })}
             </aside>
 
             <section>
@@ -1251,73 +1381,88 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
       ) : activeTab === 'jobs' ? (
         <Jobs userId={user.id} initialJobs={recommendations} initialLabel={matchedOn ? `AI-recommended for your profile` : undefined} defaultLocation={matchedOn?.location ?? undefined} />
       ) : activeTab === 'assessment' ? (
-        <Assessment />
+        <Assessment
+          key={assessmentNonce}
+          userId={user.id}
+          onJumpToResources={handleJumpToResources}
+          resourceCountByTrack={resourceCountByTrack}
+        />
       ) : (
         <section className="resources-shell">
           <div className="card resources-hero">
             <div>
               <p className="section-title">Resources Hub</p>
-              <h2 style={{ marginBottom: 8 }}>Targeted materials for sharper outcomes</h2>
-              <p style={{ color: '#9db7ff', maxWidth: 560 }}>
-                Every resource here maps to the seven assessment job fields. Filter by your industry to prioritize
-                the certifications, courses, and templates that sharpen your next move.
+              <h2 style={{ marginBottom: 8 }}>
+                Targeted materials for sharper outcomes
+                <span className="resources-hero-count">{totalResources} {totalResources === 1 ? 'resource' : 'resources'}</span>
+              </h2>
+              <p style={{ color: '#9db7ff', maxWidth: 620, margin: 0 }}>
+                Every resource here maps to the seven tech tracks. Search by keyword or filter by your industry
+                to prioritize what sharpens your next move.
               </p>
-            </div>
-            <div className="resources-hero-metrics">
-              <div>
-                <div className="resources-metric-label">Active filter</div>
-                <div className="resources-metric-value">{selectedIndustryLabel}</div>
-              </div>
-              <div>
-                <div className="resources-metric-label">Resources available</div>
-                <div className="resources-metric-value">{totalResources}</div>
-              </div>
-              <button className="ghost-button" onClick={() => setSelectedIndustry('all')} type="button">
-                Reset filter
-              </button>
             </div>
           </div>
 
           <div className="resources-layout">
             <aside className="resources-sidebar card">
-              <p className="section-title">Industry focus</p>
-              <div className="filter-chips">
+              {/* Search box — runs across title, provider, and tags so users can
+                  jump to "AWS" or "Kubernetes" without scanning every category. */}
+              <label className="resources-search">
+                <span className="resources-search-icon" aria-hidden>🔍</span>
+                <input
+                  type="text"
+                  placeholder="Search resources"
+                  value={resourceSearch}
+                  onChange={e => setResourceSearch(e.target.value)}
+                  aria-label="Search resources"
+                />
+                {resourceSearch && (
+                  <button
+                    type="button"
+                    className="resources-search-clear"
+                    onClick={() => setResourceSearch('')}
+                    aria-label="Clear search"
+                  >
+                    ×
+                  </button>
+                )}
+              </label>
+
+              <p className="section-title" style={{ marginTop: 18 }}>Industry focus</p>
+              <div className="filter-chips resources-industry-chips">
                 <button
                   type="button"
-                  className={`filter-chip ${selectedIndustry === 'all' ? 'active' : ''}`}
+                  className={`filter-chip resources-industry-chip ${selectedIndustry === 'all' ? 'active' : ''}`}
                   onClick={() => setSelectedIndustry('all')}
                   aria-pressed={selectedIndustry === 'all'}
                 >
+                  <span className="resources-industry-icon" aria-hidden>✦</span>
                   All industries
                 </button>
                 {industryOptions.map(option => (
                   <button
                     key={option.id}
                     type="button"
-                    className={`filter-chip ${selectedIndustry === option.id ? 'active' : ''}`}
+                    className={`filter-chip resources-industry-chip ${selectedIndustry === option.id ? 'active' : ''}`}
                     onClick={() => setSelectedIndustry(option.id)}
                     aria-pressed={selectedIndustry === option.id}
                   >
+                    <span className="resources-industry-icon" aria-hidden>{TRACK_ICONS[option.id]}</span>
                     {option.label}
                   </button>
                 ))}
               </div>
-
-              <div className="industry-insight">
-                <div className="industry-signal">
-                  {selectedIndustry === 'all'
-                    ? 'Pick a field to unlock tailored resources.'
-                    : industryOptions.find(option => option.id === selectedIndustry)?.signal}
-                </div>
-                <p>
-                  {selectedIndustry === 'all'
-                    ? 'We curate materials across software, data, design, ops, security, customer, and vertical tech.'
-                    : industryOptions.find(option => option.id === selectedIndustry)?.focus}
-                </p>
-              </div>
             </aside>
 
             <div className="resources-content">
+              {totalResources === 0 && (
+                <div className="card resources-empty-state">
+                  <h3 style={{ marginTop: 0 }}>No resources match your filters</h3>
+                  <p className="muted">
+                    Try clearing the search box or picking a different industry.
+                  </p>
+                </div>
+              )}
               {filteredCategories.map(category => (
                 <div className="card resources-category" key={category.id}>
                   <div className="resources-category-header">
@@ -1325,35 +1470,48 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
                       <p className="section-title">{category.title}</p>
                       <h3 style={{ margin: 0 }}>{category.description}</h3>
                     </div>
-                    <span className="pill subtle">{category.items.length} items</span>
+                    <span className="pill subtle">{category.items.length} {category.items.length === 1 ? 'item' : 'items'}</span>
                   </div>
                   {category.items.length === 0 ? (
                     <div className="resources-empty">
-                      No resources match this filter yet. Try another field or reset to see everything.
+                      No resources match the active filters in this category.
                     </div>
                   ) : (
                     <div className="resource-grid">
-                      {category.items.map(item => (
-                        <a
-                          className="resource-card"
-                          key={`${category.id}-${item.title}`}
-                          href={item.link}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <div className="resource-card-header">
-                            <span className="pill">{item.level}</span>
-                            <span className="resource-format">{item.format}</span>
-                          </div>
-                          <h4>{item.title}</h4>
-                          <p className="resource-provider">{item.provider}</p>
-                          <div className="resource-meta">
-                            <span>{item.duration}</span>
-                            <span>·</span>
-                            <span>{item.tags.join(' · ')}</span>
-                          </div>
-                        </a>
-                      ))}
+                      {category.items.map(item => {
+                        const visibleTags = item.tags.slice(0, 3);
+                        const hiddenTagCount = item.tags.length - visibleTags.length;
+                        return (
+                          <a
+                            className="resource-card"
+                            key={`${category.id}-${item.title}`}
+                            href={item.link}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <div className="resource-card-pills">
+                              <span className="pill">{item.level}</span>
+                              <span className="pill subtle">{item.format}</span>
+                            </div>
+                            <h4 className="resource-card-title">{item.title}</h4>
+                            <p className="resource-provider">{item.provider}</p>
+                            {visibleTags.length > 0 && (
+                              <div className="resource-card-tags">
+                                {visibleTags.map(tag => (
+                                  <span key={tag} className="pill subtle small">{tag}</span>
+                                ))}
+                                {hiddenTagCount > 0 && (
+                                  <span className="resource-card-tag-more">+{hiddenTagCount} more</span>
+                                )}
+                              </div>
+                            )}
+                            <div className="resource-card-footer">
+                              <span className="resource-card-duration">{item.duration}</span>
+                              <span className="resource-card-open">Open ↗</span>
+                            </div>
+                          </a>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1364,6 +1522,43 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
       )}
 
       {/* Settings Modal */}
+      {/* Skills modal — shows the full list of LLM-extracted skills + tools.
+          Triggered by clicking the "Skills Found" stat tile on the dashboard. */}
+      {skillsModalOpen && (
+        <div className="modal-backdrop" onClick={() => setSkillsModalOpen(false)}>
+          <div className="modal-card card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
+                Skills found in your resume
+                <span className="resources-hero-count" style={{ marginLeft: 10 }}>
+                  {allSkills.length}
+                </span>
+              </h3>
+              <button
+                type="button"
+                className="ghost-button modal-close"
+                onClick={() => setSkillsModalOpen(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="muted" style={{ marginTop: 0, marginBottom: 16, fontSize: '0.9rem' }}>
+              Extracted automatically from your latest resume upload. Re-upload to refresh.
+            </p>
+            {allSkills.length === 0 ? (
+              <p className="muted">No skills detected yet — upload a resume to populate this list.</p>
+            ) : (
+              <div className="skill-cloud">
+                {allSkills.map(skill => (
+                  <span key={skill} className="pill subtle">{skill}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {settingsOpen && (
         <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
           <div className="modal-card card" onClick={e => e.stopPropagation()}>
@@ -1375,6 +1570,7 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
             <div className="modal-tabs">
               <button type="button" className={settingsTab === 'password' ? 'active' : ''} onClick={() => setSettingsTab('password')}>Password</button>
               <button type="button" className={settingsTab === 'email' ? 'active' : ''} onClick={() => setSettingsTab('email')}>Email</button>
+              <button type="button" className={settingsTab === 'display' ? 'active' : ''} onClick={() => setSettingsTab('display')}>Display</button>
             </div>
 
             {settingsTab === 'password' && (
@@ -1434,6 +1630,28 @@ export default function App({ user, onLogout, onUserUpdate }: AppProps) {
                     </button>
                   </form>
                 )}
+              </>
+            )}
+
+            {settingsTab === 'display' && (
+              <>
+                <p className="muted" style={{ marginBottom: 16, fontSize: '0.88rem' }}>
+                  Choose how GitHired looks across all pages. The setting is saved to this browser.
+                </p>
+                <div className="display-toggle">
+                  <div className="display-toggle-label">
+                    <strong>Light theme</strong>
+                    <small>{theme === 'light' ? 'On — using a brighter palette across the app.' : 'Off — using the default dark palette.'}</small>
+                  </div>
+                  <label className="theme-switch" aria-label="Toggle light theme">
+                    <input
+                      type="checkbox"
+                      checked={theme === 'light'}
+                      onChange={e => setTheme(e.target.checked ? 'light' : 'dark')}
+                    />
+                    <span className="theme-switch-slider" />
+                  </label>
+                </div>
               </>
             )}
           </div>

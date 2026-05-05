@@ -79,7 +79,6 @@ export default function AgentChat({ userId }: { userId: string }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [showTools, setShowTools] = useState(false);
 
   async function sendMessage() {
     if (!input.trim()) return;
@@ -136,14 +135,6 @@ export default function AgentChat({ userId }: { userId: string }) {
     setConversationId(null);
   }
 
-  const formatJson = (payload: string) => {
-    try {
-      return JSON.stringify(JSON.parse(payload), null, 2);
-    } catch {
-      return payload;
-    }
-  };
-
   return (
     <div className="chat-panel">
       <div className="chat-toolbar">
@@ -152,14 +143,8 @@ export default function AgentChat({ userId }: { userId: string }) {
           <h4 style={{ margin: 0 }}>AI Career Coach</h4>
         </div>
         <div className="chat-actions">
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={showTools}
-              onChange={(e) => setShowTools(e.target.checked)}
-            />
-            <span>Show tool usage</span>
-          </label>
+          {/* "Show tool usage" toggle was removed — it exposed internal agent tool
+              names + raw arguments/results which aren't meant for end users. */}
           <button type="button" className="ghost-button" onClick={clearConversation}>
             Clear Chat
           </button>
@@ -189,26 +174,8 @@ export default function AgentChat({ userId }: { userId: string }) {
               {msg.role === 'assistant' ? renderMarkdown(msg.content) : msg.content}
             </div>
 
-            {showTools && msg.toolsUsed && msg.toolsUsed.length > 0 && (
-              <div className="chat-tools">
-                <strong>Tools used</strong>
-                {msg.toolsUsed.map((tool, tidx) => (
-                  <details key={tidx}>
-                    <summary>{tool.toolName}</summary>
-                    <div className="tool-details">
-                      <div>
-                        <strong>Arguments</strong>
-                        <pre>{formatJson(tool.arguments)}</pre>
-                      </div>
-                      <div>
-                        <strong>Result</strong>
-                        <pre>{formatJson(tool.result)}</pre>
-                      </div>
-                    </div>
-                  </details>
-                ))}
-              </div>
-            )}
+            {/* Tool usage block intentionally hidden from end users — it leaked
+                internal agent tool names and raw arguments/results. */}
           </div>
         ))}
 
